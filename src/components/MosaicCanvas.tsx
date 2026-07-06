@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { MosaicTemplate, MosaicRegion } from "../templates";
 import { MosaicOptions, TileShape } from "../types";
 
@@ -23,7 +23,7 @@ interface MosaicCanvasProps {
   onRegionSelect: (regionId: string) => void;
   options: MosaicOptions;
   customImage: HTMLImageElement | null;
-  viewMode: "vector" | "mosaic" | "guide";
+  viewMode: string;
   buildProgress: number; // 0 to 1 for build animation
   onTileStatsChange?: (stats: Record<string, { hex: string; count: number; name: string }>) => void;
   
@@ -33,6 +33,196 @@ interface MosaicCanvasProps {
   showNumbers?: boolean;
   activeEditTool?: "move" | "swap" | "erase" | "add";
   activeColor?: string;
+
+  // Object Selection Features
+  detectedObjects?: Array<{ id: string; name: string; box: number[]; polygon?: number[][] }>;
+  selectedObjectIds?: string[];
+  hoveredObjectId?: string | null;
+  onHoverObject?: (id: string | null) => void;
+  onSelectObject?: (id: string) => void;
+}
+
+// Check if a point (px, py) is inside a normalized polygon [[x1,y1], [x2,y2], ...] (coordinates 0 to 100)
+function isPointInPolygon(px: number, py: number, polygon: number[][]): boolean {
+  let isInside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0], yi = polygon[i][1];
+    const xj = polygon[j][0], yj = polygon[j][1];
+    const intersect = ((yi > py) !== (yj > py))
+        && (px < (xj - xi) * (py - yi) / (yj - yi + 0.00001) + xi);
+    if (intersect) isInside = !isInside;
+  }
+  return isInside;
+}
+
+// Fallback to organic capsule/wave polygon if only bounding box is present
+function getOrganicObjectPolygon(obj: { box: number[]; polygon?: number[][] }): number[][] {
+  if (obj.polygon && obj.polygon.length >= 3) {
+    return obj.polygon;
+  }
+  const [ymin, xmin, ymax, xmax] = obj.box;
+  const points: number[][] = [];
+  const segments = 24;
+  const cx = (xmin + xmax) / 2;
+  const cy = (ymin + ymax) / 2;
+  const rx = (xmax - xmin) / 2;
+  const ry = (ymax - ymin) / 2;
+
+  for (let i = 0; i < segments; i++) {
+    const angle = (i / segments) * Math.PI * 2;
+    // Elegant organic ripples to trace natural, beautiful contours
+    const ripple = 1.0 + 0.07 * Math.sin(angle * 4) + 0.03 * Math.cos(angle * 7);
+    const px = Math.max(0, Math.min(100, cx + rx * Math.cos(angle) * ripple));
+    const py = Math.max(0, Math.min(100, cy + ry * Math.sin(angle) * ripple));
+    points.push([px, py]);
+  }
+  return points;
+}
+
+// Highly accurate, edge-aware client-side foreground silhouette extractor
+function extractClientSideForegroundContour(uploadedImgData: ImageData, edgeData: ImageData | null): number[][] {
+  const size = 500;
+  // Step 1: Smart background sampling around the outer margins (10% border)
+  const margin = 20;
+  let bgR = 0, bgG = 0, bgB = 0;
+  let bgCount = 0;
+
+  // Sample top, bottom, left, right edges
+  for (let x = 0; x < size; x += 25) {
+    const topIdx = (margin * size + x) * 4;
+    const botIdx = ((size - margin) * size + x) * 4;
+    bgR += uploadedImgData.data[topIdx] + uploadedImgData.data[botIdx];
+    bgG += uploadedImgData.data[topIdx + 1] + uploadedImgData.data[botIdx + 1];
+    bgB += uploadedImgData.data[topIdx + 2] + uploadedImgData.data[botIdx + 2];
+    bgCount += 2;
+  }
+  for (let y = margin; y < size - margin; y += 25) {
+    const leftIdx = (y * size + margin) * 4;
+    const rightIdx = (y * size + size - margin) * 4;
+    bgR += uploadedImgData.data[leftIdx] + uploadedImgData.data[rightIdx];
+    bgG += uploadedImgData.data[leftIdx + 1] + uploadedImgData.data[rightIdx + 1];
+    bgB += uploadedImgData.data[leftIdx + 2] + uploadedImgData.data[rightIdx + 2];
+    bgCount += 2;
+  }
+
+  bgR = bgCount > 0 ? bgR / bgCount : 240;
+  bgG = bgCount > 0 ? bgG / bgCount : 240;
+  bgB = bgCount > 0 ? bgB / bgCount : 240;
+
+  // Step 2: Build density map of pixels that deviate strongly from the average background color
+  const fgDensity = new Float32Array(size * size);
+  let centerSumX = 0;
+  let centerSumY = 0;
+  let totalFgWeight = 0;
+
+  for (let y = 15; y < size - 15; y += 3) {
+    for (let x = 15; x < size - 15; x += 3) {
+      const idx = y * size + x;
+      const pixelIdx = idx * 4;
+      const r = uploadedImgData.data[pixelIdx];
+      const g = uploadedImgData.data[pixelIdx + 1];
+      const b = uploadedImgData.data[pixelIdx + 2];
+
+      const colorDist = Math.hypot(r - bgR, g - bgG, b - bgB);
+      let isEdge = false;
+      if (edgeData) {
+        isEdge = edgeData.data[pixelIdx] > 128;
+      }
+
+      // If color is distinctly different OR it sits on a strong high-contrast edge, mark it as high weight foreground
+      if (colorDist > 55 || isEdge) {
+        const weight = isEdge ? 2.5 : 1.0;
+        fgDensity[idx] = weight;
+
+        // Favor central weight to avoid capturing background borders
+        const distanceToCenter = Math.hypot(x - size/2, y - size/2);
+        const centerBonus = Math.max(0.1, 1.0 - distanceToCenter / (size / 1.5));
+        
+        centerSumX += x * weight * centerBonus;
+        centerSumY += y * weight * centerBonus;
+        totalFgWeight += weight * centerBonus;
+      }
+    }
+  }
+
+  // Calculate center of mass of the human silhouette/foreground object
+  const cx = totalFgWeight > 10 ? Math.round(centerSumX / totalFgWeight) : Math.round(size / 2);
+  const cy = totalFgWeight > 10 ? Math.round(centerSumY / totalFgWeight) : Math.round(size / 2);
+
+  // Step 3: Run radial ray-casting outward from the center of mass to trace the silhouette boundary
+  const points: number[][] = [];
+  const totalRays = 36;
+
+  for (let i = 0; i < totalRays; i++) {
+    const angle = (i / totalRays) * Math.PI * 2;
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+
+    // Max search distance before hitting edges
+    const maxD = Math.min(cx, size - 1 - cx, cy, size - 1 - cy, 240);
+    let boundaryD = 15; // start slightly away from the center of mass
+
+    for (let d = 20; d <= maxD; d += 3) {
+      const rx = Math.round(cx + cosA * d);
+      const ry = Math.round(cy + sinA * d);
+      const idx = ry * size + rx;
+
+      // Detect edge/boundary transition: either a Sobel edge OR transition back into background color
+      let isEdge = false;
+      if (edgeData) {
+        isEdge = edgeData.data[idx * 4] > 128;
+      }
+
+      const pixelIdx = idx * 4;
+      const r = uploadedImgData.data[pixelIdx];
+      const g = uploadedImgData.data[pixelIdx + 1];
+      const b = uploadedImgData.data[pixelIdx + 2];
+      const colorDist = Math.hypot(r - bgR, g - bgG, b - bgB);
+
+      // Boundary condition: hits Sobel edge OR background color becomes similar to sampled background
+      if (isEdge || colorDist < 40) {
+        boundaryD = d;
+        break;
+      }
+    }
+
+    if (boundaryD === 15) {
+      // Smooth visual fallback ellipse radius if ray misses
+      boundaryD = 130;
+    }
+
+    const bx = cx + cosA * boundaryD;
+    const by = cy + sinA * boundaryD;
+
+    points.push([
+      Math.max(1, Math.min(99, (bx / size) * 100)),
+      Math.max(1, Math.min(99, (by / size) * 100))
+    ]);
+  }
+
+  // Step 4: Apply 3-pass moving-average smoothing for a beautiful, organic aesthetic
+  const smoothedPoints: number[][] = [];
+  for (let pass = 0; pass < 2; pass++) {
+    const currentList = pass === 0 ? points : smoothedPoints;
+    const targetList = pass === 0 ? smoothedPoints : [];
+    
+    for (let i = 0; i < totalRays; i++) {
+      const prev = currentList[(i - 1 + totalRays) % totalRays];
+      const curr = currentList[i];
+      const next = currentList[(i + 1) % totalRays];
+
+      const sx = (prev[0] * 0.25) + (curr[0] * 0.5) + (next[0] * 0.25);
+      const sy = (prev[1] * 0.25) + (curr[1] * 0.5) + (next[1] * 0.25);
+      
+      if (pass === 0) {
+        targetList.push([sx, sy]);
+      } else {
+        currentList[i] = [sx, sy];
+      }
+    }
+  }
+
+  return smoothedPoints;
 }
 
 // Convert Hex to RGB with optional shift and transparency
@@ -126,11 +316,164 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   showNumbers = false,
   activeEditTool = "move",
   activeColor = "#ffd700",
+  detectedObjects = [],
+  selectedObjectIds = [],
+  hoveredObjectId = null,
+  onHoverObject,
+  onSelectObject,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [hoveredRegionId, setHoveredRegionId] = useState<string | null>(null);
   const [edgeData, setEdgeData] = useState<ImageData | null>(null);
   const [uploadedImgData, setUploadedImgData] = useState<ImageData | null>(null);
+
+  // Local high-precision edge-aware object polygon generator (Magic Wand & Contour Refinement)
+  const getObjectPolygon = useCallback((obj: { id: string; box: number[]; polygon?: number[][] }): number[][] => {
+    // 1. If we have a custom semantic polygon directly from Gemini Vision, use it 100%!
+    if (obj.polygon && obj.polygon.length >= 3 && !obj.id.startsWith("fallback_")) {
+      return obj.polygon;
+    }
+
+    // 2. If it is the fallback's main focus region, generate a smart client-side foreground contour!
+    if (obj.id === "fallback_obj_1" && uploadedImgData) {
+      return extractClientSideForegroundContour(uploadedImgData, edgeData);
+    }
+
+    // If the image data is not loaded yet, use the organic fallback
+    if (!uploadedImgData) {
+      return getOrganicObjectPolygon(obj);
+    }
+
+    try {
+      // 1. Convert normalized box (0-100) to 500x500 pixel coordinate scale
+      const size = 500;
+      const [ymin, xmin, ymax, xmax] = obj.box;
+      const xStart = Math.max(0, Math.min(size - 1, Math.round((xmin / 100) * size)));
+      const xEnd = Math.max(0, Math.min(size - 1, Math.round((xmax / 100) * size)));
+      const yStart = Math.max(0, Math.min(size - 1, Math.round((ymin / 100) * size)));
+      const yEnd = Math.max(0, Math.min(size - 1, Math.round((ymax / 100) * size)));
+
+      // 2. Compute seed coordinate as the center of the bounding box
+      const cx = Math.max(0, Math.min(size - 1, Math.round((xStart + xEnd) / 2)));
+      const cy = Math.max(0, Math.min(size - 1, Math.round((yStart + yEnd) / 2)));
+
+      // 3. Sample average color around the center point
+      let sumR = 0, sumG = 0, sumB = 0, count = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const sx = cx + dx;
+          const sy = cy + dy;
+          if (sx >= 0 && sx < size && sy >= 0 && sy < size) {
+            const idx = (sy * size + sx) * 4;
+            sumR += uploadedImgData.data[idx];
+            sumG += uploadedImgData.data[idx + 1];
+            sumB += uploadedImgData.data[idx + 2];
+            count++;
+          }
+        }
+      }
+      const seedR = count > 0 ? sumR / count : 128;
+      const seedG = count > 0 ? sumG / count : 128;
+      const seedB = count > 0 ? sumB / count : 128;
+
+      // 4. Run simple queue-based flood fill to build a binary mask of the object
+      const mask = new Uint8Array(size * size);
+      const queue: [number, number][] = [[cx, cy]];
+      mask[cy * size + cx] = 1;
+
+      // Color tolerance threshold - tuned for high quality natural boundaries
+      const colorTolerance = 75;
+
+      while (queue.length > 0) {
+        const [x, y] = queue.shift()!;
+
+        const neighbors = [
+          [x + 1, y],
+          [x - 1, y],
+          [x, y + 1],
+          [x, y - 1]
+        ];
+
+        for (const [nx, ny] of neighbors) {
+          if (nx >= xStart && nx <= xEnd && ny >= yStart && ny <= yEnd) {
+            const idx = ny * size + nx;
+            if (mask[idx] === 0) {
+              // Edge barrier from Sobel filter
+              const isEdge = edgeData ? edgeData.data[idx * 4] > 100 : false;
+
+              // Color similarity
+              const pixelIdx = idx * 4;
+              const r = uploadedImgData.data[pixelIdx];
+              const g = uploadedImgData.data[pixelIdx + 1];
+              const b = uploadedImgData.data[pixelIdx + 2];
+              const colorDist = Math.hypot(r - seedR, g - seedG, b - seedB);
+
+              if (!isEdge && colorDist < colorTolerance) {
+                mask[idx] = 1;
+                queue.push([nx, ny]);
+              }
+            }
+          }
+        }
+      }
+
+      // 5. Trace 36 radial rays from center to extract a beautiful smooth closed contour
+      const points: number[][] = [];
+      const totalRays = 36;
+
+      for (let i = 0; i < totalRays; i++) {
+        const angle = (i / totalRays) * Math.PI * 2;
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
+
+        // Max search distance is distance from center to box edge in that direction
+        const tX = cosA > 0 ? (xEnd - cx) / cosA : (xStart - cx) / cosA;
+        const tY = sinA > 0 ? (yEnd - cy) / sinA : (yStart - cy) / sinA;
+        const maxD = Math.min(Math.abs(tX), Math.abs(tY));
+
+        let lastValidX = cx;
+        let lastValidY = cy;
+
+        for (let d = 0; d <= maxD; d += 2) {
+          const rxPixel = Math.round(cx + cosA * d);
+          const ryPixel = Math.round(cy + sinA * d);
+
+          if (rxPixel >= 0 && rxPixel < size && ryPixel >= 0 && ryPixel < size) {
+            if (mask[ryPixel * size + rxPixel] === 1) {
+              lastValidX = rxPixel;
+              lastValidY = ryPixel;
+            } else {
+              break;
+            }
+          } else {
+            break;
+          }
+        }
+
+        // Convert back to percentage (0-100)
+        const px = Math.max(0, Math.min(100, (lastValidX / size) * 100));
+        const py = Math.max(0, Math.min(100, (lastValidY / size) * 100));
+        points.push([px, py]);
+      }
+
+      // Smooth the points with a sliding window for extra visual elegance
+      const smoothedPoints: number[][] = [];
+      for (let i = 0; i < totalRays; i++) {
+        const prev = points[(i - 1 + totalRays) % totalRays];
+        const curr = points[i];
+        const next = points[(i + 1) % totalRays];
+
+        const sx = (prev[0] + curr[0] + next[0]) / 3;
+        const sy = (prev[1] + curr[1] + next[1]) / 3;
+        smoothedPoints.push([sx, sy]);
+      }
+
+      return smoothedPoints;
+    } catch (e) {
+      console.warn("Error calculating high-precision polygon, using fallback:", e);
+      return getOrganicObjectPolygon(obj);
+    }
+  }, [uploadedImgData, edgeData]);
 
   // Interactive manual tiles state
   const [tiles, setTiles] = useState<InteractiveTile[]>([]);
@@ -354,6 +697,19 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
       for (let y = hStep; y < height; y += step + options.gap) {
         for (let x = hStep; x < width; x += step + options.gap) {
+          // If we are in "objects" mode, we ONLY generate tiles inside selected object precise polygon shapes!
+          if (viewMode === "objects") {
+            const px = (x / width) * 100;
+            const py = (y / height) * 100;
+            const isInsideSelected = selectedObjectIds.some(id => {
+              const obj = detectedObjects.find(o => o.id === id);
+              if (!obj) return false;
+              const poly = getObjectPolygon(obj);
+              return isPointInPolygon(px, py, poly);
+            });
+            if (!isInsideSelected) continue;
+          }
+
           let rSum = 0, gSum = 0, bSum = 0, count = 0;
           const startX = Math.max(0, Math.floor(x - hStep));
           const endX = Math.min(imgW - 1, Math.floor(x + hStep));
@@ -437,7 +793,10 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     options.jitter,
     options.useGroutGaps,
     uploadedImgData,
-    edgeData
+    edgeData,
+    viewMode,
+    selectedObjectIds,
+    detectedObjects
   ]);
 
   // 2. MAIN DRAW EFFECT
@@ -516,6 +875,154 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
       } else if (customImage) {
         // DRAW ORIGINAL IMAGE PREVIEW
         ctx.drawImage(customImage, 0, 0, width, height);
+      }
+    } else if (viewMode === "objects" && customImage) {
+      // OBJECT SELECTION VIEW MODE:
+      // 1. Draw original background image
+      ctx.drawImage(customImage, 0, 0, width, height);
+
+      // 2. Draw our generated mosaic tiles inside the selected objects
+      ctx.save();
+      for (const tile of tiles) {
+        const displayColor = getDisplayColor(tile.color);
+        ctx.save();
+        ctx.translate(tile.x + tile.dx, tile.y + tile.dy);
+        ctx.rotate(tile.angle);
+        
+        // Render mosaic tiles with a clean, standard look on top of the original image
+        ctx.fillStyle = hexToRgb(displayColor, tile.shadeShift, 1.0);
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
+        ctx.lineWidth = 0.5;
+        
+        drawTile(ctx, options.shape, options.tileSize, options.gap);
+
+        // Show numbers if requested
+        if (showNumbers) {
+          const num = getColorNumber(tile.color);
+          const rgb = getRgb(displayColor);
+          const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+          ctx.fillStyle = luminance > 0.55 ? "#000000" : "#ffffff";
+          ctx.font = `bold ${Math.max(6, options.tileSize * 0.45)}px monospace`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(num.toString(), 0, 0);
+        }
+
+        ctx.restore();
+      }
+      ctx.restore();
+
+      // 3. Draw precise silhouette polygons and text labels for objects
+      if (detectedObjects && detectedObjects.length > 0) {
+        detectedObjects.forEach((obj) => {
+          const polyPoints = getObjectPolygon(obj);
+          if (polyPoints.length === 0) return;
+
+          const isHovered = obj.id === hoveredObjectId;
+          const isSelected = selectedObjectIds.includes(obj.id);
+
+          ctx.save();
+          
+          // Generate precise canvas path for the polygon
+          ctx.beginPath();
+          polyPoints.forEach(([px, py], idx) => {
+            const cx = (px / 100) * width;
+            const cy = (py / 100) * height;
+            if (idx === 0) {
+              ctx.moveTo(cx, cy);
+            } else {
+              ctx.lineTo(cx, cy);
+            }
+          });
+          ctx.closePath();
+
+          if (isHovered) {
+            // Elegant glowing hover style
+            ctx.shadowColor = "rgba(99, 102, 241, 0.85)";
+            ctx.shadowBlur = 12;
+            ctx.strokeStyle = "#818cf8";
+            ctx.lineWidth = 2.5;
+            ctx.fillStyle = "rgba(99, 102, 241, 0.18)";
+            ctx.fill();
+            ctx.stroke();
+          } else if (isSelected) {
+            // Gold outline for selected object silhouette
+            ctx.strokeStyle = "#ffd700";
+            ctx.lineWidth = 2.0;
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            // Subtle amber tint for selected area
+            ctx.fillStyle = "rgba(245, 158, 11, 0.05)";
+            ctx.fill();
+          } else {
+            // Translucent dashed contour line for discoverability
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+            ctx.lineWidth = 1.2;
+            ctx.setLineDash([3, 5]);
+            ctx.stroke();
+          }
+          ctx.restore();
+
+          // Draw elegant floating badge near the top-most center coordinate of the polygon
+          let minY = 999;
+          let topX = 0;
+          let topY = 0;
+          polyPoints.forEach(([px, py]) => {
+            const cx = (px / 100) * width;
+            const cy = (py / 100) * height;
+            if (cy < minY) {
+              minY = cy;
+              topX = cx;
+              topY = cy;
+            }
+          });
+
+          // Fallback to bounding box center if topX calculation fails
+          if (topX === 0 && topY === 0) {
+            const [ymin, xmin] = obj.box;
+            topX = (xmin / 100) * width;
+            topY = (ymin / 100) * height;
+          }
+
+          ctx.save();
+          ctx.font = "bold 10px Inter, system-ui, sans-serif";
+          const text = `${obj.name}${isSelected ? " 🧩" : ""}`;
+          const textWidth = ctx.measureText(text).width;
+          
+          ctx.fillStyle = isHovered 
+            ? "rgba(99, 102, 241, 0.95)" 
+            : isSelected 
+            ? "rgba(217, 119, 6, 0.95)" 
+            : "rgba(15, 23, 42, 0.75)";
+          
+          // Align badge neatly above the top of the polygon, or offset down if near the canvas boundary
+          const badgeY = topY > 20 ? topY - 5 : topY + 15;
+          const badgeX = Math.max(5, Math.min(width - textWidth - 15, topX - 10));
+
+          // Draw rounded badge container
+          const radius = 4;
+          const bx = badgeX;
+          const by = badgeY - 11;
+          const bw = textWidth + 12;
+          const bh = 16;
+          
+          ctx.beginPath();
+          ctx.moveTo(bx + radius, by);
+          ctx.lineTo(bx + bw - radius, by);
+          ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + radius);
+          ctx.lineTo(bx + bw, by + bh - radius);
+          ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - radius, by + bh);
+          ctx.lineTo(bx + radius, by + bh);
+          ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - radius);
+          ctx.lineTo(bx, by + radius);
+          ctx.quadraticCurveTo(bx, by, bx + radius, by);
+          ctx.closePath();
+          ctx.fill();
+          
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(text, badgeX + 6, badgeY + 1);
+          ctx.restore();
+        });
       }
     } else if (viewMode === "mosaic" || viewMode === "guide") {
       // MOSAIC RENDER & GUIDE MODE - Consume state `tiles`
@@ -617,7 +1124,10 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     customImageColors,
     showNumbers,
     hoveredTileId,
-    swapSelectedTileId
+    swapSelectedTileId,
+    detectedObjects,
+    selectedObjectIds,
+    hoveredObjectId
   ]);
 
   // 3. INTERACTIVE COORDINATE & TILE SELECTION HELPERS
@@ -646,8 +1156,37 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     return closest;
   };
 
-  // Vector preview mouse handlers
+  // Vector preview & Object detection mouse handlers
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (viewMode === "objects") {
+      const coords = getCanvasCoords(e);
+      if (!coords) return;
+      const width = template ? template.width : 500;
+      const height = template ? template.height : 500;
+      const px = (coords.x / width) * 100;
+      const py = (coords.y / height) * 100;
+
+      let clickedId: string | null = null;
+      if (detectedObjects && detectedObjects.length > 0) {
+        let bestArea = Infinity;
+        for (const obj of detectedObjects) {
+          const poly = getObjectPolygon(obj);
+          if (isPointInPolygon(px, py, poly)) {
+            const [ymin, xmin, ymax, xmax] = obj.box;
+            const area = (ymax - ymin) * (xmax - xmin);
+            if (area < bestArea) {
+              bestArea = area;
+              clickedId = obj.id;
+            }
+          }
+        }
+      }
+      if (clickedId && onSelectObject) {
+        onSelectObject(clickedId);
+      }
+      return;
+    }
+
     if (viewMode !== "vector" || !template) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
@@ -666,6 +1205,35 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   };
 
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (viewMode === "objects") {
+      const coords = getCanvasCoords(e);
+      if (!coords) return;
+      const width = template ? template.width : 500;
+      const height = template ? template.height : 500;
+      const px = (coords.x / width) * 100;
+      const py = (coords.y / height) * 100;
+
+      let hoveredId: string | null = null;
+      if (detectedObjects && detectedObjects.length > 0) {
+        let bestArea = Infinity;
+        for (const obj of detectedObjects) {
+          const poly = getObjectPolygon(obj);
+          if (isPointInPolygon(px, py, poly)) {
+            const [ymin, xmin, ymax, xmax] = obj.box;
+            const area = (ymax - ymin) * (xmax - xmin);
+            if (area < bestArea) {
+              bestArea = area;
+              hoveredId = obj.id;
+            }
+          }
+        }
+      }
+      if (onHoverObject) {
+        onHoverObject(hoveredId);
+      }
+      return;
+    }
+
     if (viewMode !== "vector" || !template) return;
     const coords = getCanvasCoords(e);
     if (!coords) return;
@@ -689,6 +1257,10 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   const [isMouseDown, setIsMouseDown] = useState(false);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (viewMode === "objects") {
+      handleCanvasClick(e);
+      return;
+    }
     if (viewMode !== "mosaic") {
       handleCanvasClick(e);
       return;
@@ -750,6 +1322,10 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (viewMode === "objects") {
+      handleCanvasMouseMove(e);
+      return;
+    }
     if (viewMode !== "mosaic") {
       handleCanvasMouseMove(e);
       return;
