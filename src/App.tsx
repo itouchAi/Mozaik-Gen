@@ -36,8 +36,11 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // View Mode: 'vector' (coloring stage) or 'mosaic' (final tiles rendering)
-  const [viewMode, setViewMode] = useState<"vector" | "mosaic">("vector");
+  // View Mode: 'vector' (coloring stage), 'mosaic' (final tiles rendering) or 'guide' (real image overlay guide)
+  const [viewMode, setViewMode] = useState<"vector" | "mosaic" | "guide">("vector");
+  
+  // Custom color count state
+  const [colorCount, setColorCount] = useState<number>(6);
   
   // Build progression state (for construction animation)
   const [buildProgress, setBuildProgress] = useState<number>(1);
@@ -117,48 +120,105 @@ export default function App() {
       setIsCustomConfirmed(false); // Start in unconfirmed preview stage
       setViewMode("vector"); // Orijinal Önizleme mode
       setBuildProgress(1);
-
-      // Extract dominant colors from the uploaded image
-      try {
-        const tempCanvas = document.createElement("canvas");
-        const ctx = tempCanvas.getContext("2d");
-        if (ctx) {
-          tempCanvas.width = 50;
-          tempCanvas.height = 50;
-          ctx.drawImage(img, 0, 0, 50, 50);
-          const imgData = ctx.getImageData(0, 0, 50, 50);
-          const colorCounts: Record<string, number> = {};
-          
-          for (let i = 0; i < imgData.data.length; i += 16) {
-            const r = imgData.data[i];
-            const g = imgData.data[i+1];
-            const b = imgData.data[i+2];
-            const a = imgData.data[i+3];
-            if (a < 200) continue; // skip transparent pixels
-            
-            // Quantize colors to group close shades together
-            const qr = Math.round(r / 24) * 24;
-            const qg = Math.round(g / 24) * 24;
-            const qb = Math.round(b / 24) * 24;
-            
-            const hex = "#" + [qr, qg, qb].map(v => Math.min(255, Math.max(0, v)).toString(16).padStart(2, '0')).join('');
-            colorCounts[hex] = (colorCounts[hex] || 0) + 1;
-          }
-          
-          // Sort and pick top 8 colors
-          const sortedColors = Object.entries(colorCounts)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 8)
-            .map(entry => entry[0]);
-            
-          setCustomImageColors(sortedColors);
-          setCustomColorReplacements({}); // Clear previous replacements
-        }
-      } catch (err) {
-        console.error("Error extracting dominant colors", err);
-      }
     };
   };
+
+  // Dynamically analyze and reduce custom image colors whenever the image or the color count changes
+  useEffect(() => {
+    if (!customImage) return;
+
+    try {
+      const tempCanvas = document.createElement("canvas");
+      const ctx = tempCanvas.getContext("2d");
+      if (ctx) {
+        // Slightly higher resolution for precise color clustering
+        tempCanvas.width = 100;
+        tempCanvas.height = 100;
+        ctx.drawImage(customImage, 0, 0, 100, 100);
+        const imgData = ctx.getImageData(0, 0, 100, 100);
+
+        // A high-quality predefined set of basic anchor colors to represent distinct color groups.
+        // This ensures the extracted colors are simple, vibrant, and not similar tones of the same shade.
+        const BASIC_ANCHORS = [
+          { hex: "#e11d48", name: "Kırmızı" },
+          { hex: "#ea580c", name: "Turuncu" },
+          { hex: "#facc15", name: "Sarı" },
+          { hex: "#16a34a", name: "Yeşil" },
+          { hex: "#2563eb", name: "Mavi" },
+          { hex: "#7c3aed", name: "Mor" },
+          { hex: "#78350f", name: "Kahverengi" },
+          { hex: "#db2777", name: "Pembe" },
+          { hex: "#0d9488", name: "Turkuaz" },
+          { hex: "#f8fafc", name: "Beyaz" },
+          { hex: "#1e293b", name: "Siyah" },
+          { hex: "#64748b", name: "Gri" }
+        ];
+
+        const getRgbFromHex = (hex: string) => {
+          const clean = hex.replace("#", "");
+          const r = parseInt(clean.substring(0, 2), 16) || 0;
+          const g = parseInt(clean.substring(2, 4), 16) || 0;
+          const b = parseInt(clean.substring(4, 6), 16) || 0;
+          return { r, g, b };
+        };
+
+        const anchorRgbList = BASIC_ANCHORS.map(a => ({
+          hex: a.hex,
+          rgb: getRgbFromHex(a.hex)
+        }));
+
+        const counts: Record<string, number> = {};
+
+        // For each pixel in the 100x100 matrix, find the closest distinct basic anchor color
+        for (let i = 0; i < imgData.data.length; i += 4) {
+          const r = imgData.data[i];
+          const g = imgData.data[i+1];
+          const b = imgData.data[i+2];
+          const a = imgData.data[i+3];
+          if (a < 180) continue; // skip transparent pixels
+
+          let closestHex = anchorRgbList[0].hex;
+          let minDist = Infinity;
+          for (const anchor of anchorRgbList) {
+            const dist = Math.hypot(r - anchor.rgb.r, g - anchor.rgb.g, b - anchor.rgb.b);
+            if (dist < minDist) {
+              minDist = dist;
+              closestHex = anchor.hex;
+            }
+          }
+          counts[closestHex] = (counts[closestHex] || 0) + 1;
+        }
+
+        // Sort the anchors by frequency in the actual image
+        const sorted = Object.entries(counts)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, colorCount)
+          .map(entry => entry[0]);
+
+        // If the image is highly monochrome and yields fewer colors, pad it with other unique basic anchors
+        while (sorted.length < colorCount) {
+          const unusedAnchor = BASIC_ANCHORS.find(a => !sorted.includes(a.hex));
+          if (unusedAnchor) {
+            sorted.push(unusedAnchor.hex);
+          } else {
+            break;
+          }
+        }
+
+        // Sort colors by hue/luminance to keep their numbered list visually ordered and beautiful!
+        const getLuminance = (hex: string) => {
+          const rgb = getRgbFromHex(hex);
+          return 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+        };
+        const beautifullyOrdered = [...sorted].sort((a, b) => getLuminance(b) - getLuminance(a));
+
+        setCustomImageColors(beautifullyOrdered);
+        setCustomColorReplacements({}); // Reset replacement cache
+      }
+    } catch (err) {
+      console.error("Error reducing image colors dynamically:", err);
+    }
+  }, [customImage, colorCount]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -647,6 +707,31 @@ export default function App() {
                   </>
                 ) : (
                   <div className="p-5 bg-indigo-950/10 border border-indigo-500/10 rounded-2xl space-y-4">
+                    {/* Hedef Renk Sayısı (Sayı Adedi) Seçimi */}
+                    <div className="space-y-2 bg-black/40 p-3.5 rounded-xl border border-white/5 text-left">
+                      <div className="flex items-center justify-between text-xs">
+                        <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                          <Palette className="w-3.5 h-3.5 text-indigo-400" />
+                          Renk Teması / Sayı Adedi
+                        </label>
+                        <span className="font-mono bg-indigo-500/10 px-2.5 py-0.5 rounded text-indigo-300 font-bold text-xs">
+                          {colorCount} Renk
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="2"
+                        max="12"
+                        step="1"
+                        value={colorCount}
+                        onChange={(e) => setColorCount(parseInt(e.target.value))}
+                        className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                      />
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Görseldeki renkleri birbirine benzemeyen {colorCount} ana renge indirger (Sarı, Mavi, Kırmızı, Kahverengi vb.).
+                      </p>
+                    </div>
+
                     {!isCustomConfirmed ? (
                       <div className="space-y-4 text-center py-2">
                         <div className="w-12 h-12 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-full flex items-center justify-center mx-auto">
@@ -1182,6 +1267,23 @@ export default function App() {
               >
                 🧩 2. Mozaik Görünümü
               </button>
+
+              <button
+                onClick={() => {
+                  setViewMode("guide");
+                  setIsCustomConfirmed(true);
+                  setShowNumbers(true); // Automatically turn on numbers
+                  setBuildProgress(1);
+                }}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  viewMode === "guide"
+                    ? "bg-indigo-950/50 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_12px_rgba(99,102,241,0.2)]"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+                title="Orijinal resim üzerinde sayıların ve mozaik kutucuklarının yerleşimini gösterir"
+              >
+                📋 3. Sayı Kılavuzu
+              </button>
             </div>
 
             <div className="flex items-center gap-2">
@@ -1238,6 +1340,10 @@ export default function App() {
                     <p>
                       <strong className="text-slate-200">1. Boyama Aşamasındasınız:</strong> Şablonun istediğiniz bölgesine dokunarak veya tıklayarak rengini değiştirebilirsiniz. Renkleriniz tamamsa yukarıdan <strong>Mozaik Görünümü</strong>'ne geçiş yapın!
                     </p>
+                  ) : viewMode === "guide" ? (
+                    <p>
+                      <strong className="text-slate-200">3. Sayı Kılavuzu Modundasınız:</strong> Orijinal şablon çizgileriyle birlikte her bir parçanın üzerinde numarası ve sınır kutucuğu yer alır. Fiziksel yapıştırma için mükemmel bir rehberdir!
+                    </p>
                   ) : (
                     <p>
                       <strong className="text-slate-200">2. Mozaik Görünümündesiniz:</strong> Taşlar, şablona göre <strong>organik, hafif düzensiz ve döndürülmüş açılarla</strong> yerleştirildi. Mozaik Boyutu ve Düzensizlik ayarları ile oynayarak tasarımı gerçek el işçiliği gibi hassaslaştırabilirsiniz.
@@ -1247,6 +1353,10 @@ export default function App() {
                   viewMode === "vector" ? (
                     <p>
                       <strong className="text-slate-200">1. Orijinal Görsel Önizleme:</strong> Yüklediğiniz görsel şu an orijinal haliyle önizleniyor. Mozaik taşlarını oluşturmak için sol taraftaki <strong>Görseli Mozaikleştir</strong> butonuna tıklayabilirsiniz.
+                    </p>
+                  ) : viewMode === "guide" ? (
+                    <p>
+                      <strong className="text-slate-200">3. Sayı Kılavuzu Modundasınız:</strong> Orijinal resminizin üstünde her bir mozaik parçasının sınır kutucukları ve hangi renge (sayıya) karşılık geldiği gösterilir. Fiziksel montaj için mükemmel bir rehberdir!
                     </p>
                   ) : (
                     <p>

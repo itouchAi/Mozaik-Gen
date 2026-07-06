@@ -23,7 +23,7 @@ interface MosaicCanvasProps {
   onRegionSelect: (regionId: string) => void;
   options: MosaicOptions;
   customImage: HTMLImageElement | null;
-  viewMode: "vector" | "mosaic";
+  viewMode: "vector" | "mosaic" | "guide";
   buildProgress: number; // 0 to 1 for build animation
   onTileStatsChange?: (stats: Record<string, { hex: string; count: number; name: string }>) => void;
   
@@ -35,17 +35,21 @@ interface MosaicCanvasProps {
   activeColor?: string;
 }
 
-// Convert Hex to RGB with optional shift
-function hexToRgb(hex: string, shift = 0): string {
+// Convert Hex to RGB with optional shift and transparency
+function hexToRgb(hex: string, shift = 0, alpha = 1.0): string {
   const cleanHex = hex.replace("#", "");
-  let r = parseInt(cleanHex.substring(0, 2), 16);
-  let g = parseInt(cleanHex.substring(2, 4), 16);
-  let b = parseInt(cleanHex.substring(4, 6), 16);
+  let r = parseInt(cleanHex.substring(0, 2), 16) || 0;
+  let g = parseInt(cleanHex.substring(2, 4), 16) || 0;
+  let b = parseInt(cleanHex.substring(4, 6), 16) || 0;
 
   if (shift !== 0) {
     r = Math.max(0, Math.min(255, r + shift));
     g = Math.max(0, Math.min(255, g + shift));
     b = Math.max(0, Math.min(255, b + shift));
+  }
+  
+  if (alpha !== 1.0) {
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
   return `rgb(${r}, ${g}, ${b})`;
 }
@@ -451,8 +455,29 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     canvas.height = height;
 
     // Draw Background
-    ctx.fillStyle = template ? options.backgroundColor : "#f1f5f9";
+    ctx.fillStyle = template ? options.backgroundColor : (options.backgroundColor || "#0d0e15");
     ctx.fillRect(0, 0, width, height);
+
+    if (viewMode === "guide") {
+      ctx.save();
+      if (template) {
+        // Draw template faded regions as a guide background
+        ctx.globalAlpha = 0.35;
+        template.regions.forEach((region) => {
+          const path = pathCache[region.id];
+          if (!path) return;
+          ctx.fillStyle = regionColors[region.id] || region.defaultColor;
+          ctx.fill(path);
+        });
+        ctx.globalAlpha = 1.0;
+      } else if (customImage) {
+        // Draw custom uploaded image as a semi-transparent guide background
+        ctx.globalAlpha = 0.45;
+        ctx.drawImage(customImage, 0, 0, width, height);
+        ctx.globalAlpha = 1.0;
+      }
+      ctx.restore();
+    }
 
     if (viewMode === "vector") {
       if (template) {
@@ -492,8 +517,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         // DRAW ORIGINAL IMAGE PREVIEW
         ctx.drawImage(customImage, 0, 0, width, height);
       }
-    } else if (viewMode === "mosaic") {
-      // MOSAIC RENDER MODE - Consume state `tiles`
+    } else if (viewMode === "mosaic" || viewMode === "guide") {
+      // MOSAIC RENDER & GUIDE MODE - Consume state `tiles`
 
       // Compute stats
       const stats: Record<string, { hex: string; count: number; name: string }> = {};
@@ -520,6 +545,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
       const sortedTiles = [...tiles].sort((a, b) => a.order - b.order);
 
+      const isGuideMode = viewMode === "guide";
+
       for (let i = 0; i < countToDraw; i++) {
         const tile = sortedTiles[i];
         const displayColor = getDisplayColor(tile.color);
@@ -529,7 +556,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         ctx.rotate(tile.angle);
 
         // Apply shade shift to displayColor
-        ctx.fillStyle = hexToRgb(displayColor, tile.shadeShift);
+        // If guide mode, render tiles with high transparency to reveal the background image underneath, and no random shade variation to keep the basic color clear!
+        ctx.fillStyle = hexToRgb(displayColor, isGuideMode ? 0 : tile.shadeShift, isGuideMode ? 0.35 : 1.0);
 
         // Highlight if hovered or selected for swap
         const isHovered = hoveredTileId === tile.id;
@@ -538,6 +566,10 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         if (isHovered || isSwapSelected) {
           ctx.strokeStyle = isSwapSelected ? "#fbbf24" : "#6366f1";
           ctx.lineWidth = isSwapSelected ? 2.5 : 1.5;
+        } else if (isGuideMode) {
+          // Draw neat, visible outlines (kutucuklar) around the tiles in guide mode
+          ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
+          ctx.lineWidth = 0.8;
         } else {
           ctx.strokeStyle = "rgba(0, 0, 0, 0.15)";
           ctx.lineWidth = 0.5;
@@ -546,13 +578,13 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         // Draw the tile
         drawTile(ctx, options.shape, options.tileSize, options.gap);
 
-        // Draw numbers overlay inside the tile if enabled
-        if (showNumbers) {
+        // Draw numbers overlay inside the tile if enabled (always show in guide mode)
+        if (showNumbers || isGuideMode) {
           const num = getColorNumber(tile.color);
           const rgb = getRgb(displayColor);
           const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
           ctx.fillStyle = luminance > 0.55 ? "#000000" : "#ffffff";
-          ctx.font = `bold ${Math.max(6, options.tileSize * 0.4)}px monospace`;
+          ctx.font = `bold ${Math.max(6, options.tileSize * 0.45)}px monospace`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillText(num.toString(), 0, 0);
@@ -561,8 +593,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         ctx.restore();
       }
 
-      // Draw outlines on top in template mode
-      if (options.showOutlines && template) {
+      // Draw outlines on top in template mode (only for mosaic mode)
+      if (options.showOutlines && template && viewMode === "mosaic") {
         ctx.strokeStyle = options.outlineColor;
         ctx.lineWidth = options.outlineWidth;
         template.regions.forEach((region) => {
