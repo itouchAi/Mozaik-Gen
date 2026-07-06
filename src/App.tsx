@@ -1,0 +1,1280 @@
+import React, { useState, useEffect, useRef } from "react";
+import { templates, MosaicTemplate } from "./templates";
+import { MosaicCanvas } from "./components/MosaicCanvas";
+import { MosaicOptions, PRESET_PALETTES, TileShape } from "./types";
+import { 
+  Grid, 
+  Palette, 
+  Sparkles, 
+  Sliders, 
+  Download, 
+  Play, 
+  RotateCcw, 
+  Upload, 
+  Check, 
+  ChevronRight, 
+  Info, 
+  Layers, 
+  Image as ImageIcon,
+  Activity,
+  AlertCircle,
+  HelpCircle,
+  Trash2,
+  Hash
+} from "lucide-react";
+
+export default function App() {
+  // Application Modes & Templates State
+  const [selectedTemplate, setSelectedTemplate] = useState<MosaicTemplate | null>(templates[0]);
+  const [regionColors, setRegionColors] = useState<Record<string, string>>({});
+  const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
+  
+  // Custom uploaded image state
+  const [customImage, setCustomImage] = useState<HTMLImageElement | null>(null);
+  const [customImageName, setCustomImageName] = useState<string>("");
+  const [isCustomConfirmed, setIsCustomConfirmed] = useState<boolean>(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // View Mode: 'vector' (coloring stage) or 'mosaic' (final tiles rendering)
+  const [viewMode, setViewMode] = useState<"vector" | "mosaic">("vector");
+  
+  // Build progression state (for construction animation)
+  const [buildProgress, setBuildProgress] = useState<number>(1);
+  const [isBuilding, setIsBuilding] = useState<boolean>(false);
+  const buildIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Custom image color analysis and replacement states
+  const [customImageColors, setCustomImageColors] = useState<string[]>([]);
+  const [customColorReplacements, setCustomColorReplacements] = useState<Record<string, string>>({});
+
+  // Show number labels (Paint-by-Numbers)
+  const [showNumbers, setShowNumbers] = useState<boolean>(false);
+
+  // Manual interactive editing tool for tiles
+  const [activeEditTool, setActiveEditTool] = useState<"move" | "swap" | "erase" | "add">("move");
+
+  // Mosaic styling and algorithm options
+  const [options, setOptions] = useState<MosaicOptions>({
+    tileSize: 14,
+    jitter: 45, // 45% position/rotation irregularity by default
+    gap: 1.5,
+    shape: "square", // default 'square' matching bear
+    showOutlines: true,
+    outlineColor: "#ffffff", // Default white outlines
+    outlineWidth: 1.5,
+    backgroundColor: "#0d0e15", // Default dark slate
+    useGroutGaps: true, // leave neat gaps around contours
+    groutThreshold: 80,
+  });
+
+  // Color selection active palette state
+  const [activeColor, setActiveColor] = useState<string>("#ffd700");
+
+  // Statistics for physical tiles panel
+  const [tileStats, setTileStats] = useState<Record<string, { hex: string; count: number; name: string }>>({});
+
+  // AI Colorizer States
+  const [aiPrompt, setAiPrompt] = useState<string>("");
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  // Active control panel sidebar tab
+  const [activeTab, setActiveTab] = useState<"design" | "settings" | "stats">("design");
+
+  // Initialize region colors when template changes
+  useEffect(() => {
+    if (selectedTemplate) {
+      const initialColors: Record<string, string> = {};
+      selectedTemplate.regions.forEach((region) => {
+        initialColors[region.id] = region.defaultColor;
+      });
+      setRegionColors(initialColors);
+      setOptions((prev) => ({
+        ...prev,
+        backgroundColor: selectedTemplate.backgroundColor,
+        outlineColor: selectedTemplate.id === "bear" ? "#1e293b" : "#ffffff", // Dark outline for bear, white for unicorn/butterfly
+      }));
+      
+      // Auto-select first region
+      if (selectedTemplate.regions.length > 0) {
+        setSelectedRegionId(selectedTemplate.regions[0].id);
+        setActiveColor(selectedTemplate.regions[0].defaultColor);
+      }
+      setViewMode("vector");
+      setBuildProgress(1);
+    }
+  }, [selectedTemplate]);
+
+  // Handle uploaded image click / drag-drop
+  const handleImageLoad = (src: string, name: string) => {
+    const img = new Image();
+    img.src = src;
+    img.onload = () => {
+      setCustomImage(img);
+      setCustomImageName(name);
+      setSelectedTemplate(null); // Switch to custom mode
+      setIsCustomConfirmed(false); // Start in unconfirmed preview stage
+      setViewMode("vector"); // Orijinal Önizleme mode
+      setBuildProgress(1);
+
+      // Extract dominant colors from the uploaded image
+      try {
+        const tempCanvas = document.createElement("canvas");
+        const ctx = tempCanvas.getContext("2d");
+        if (ctx) {
+          tempCanvas.width = 50;
+          tempCanvas.height = 50;
+          ctx.drawImage(img, 0, 0, 50, 50);
+          const imgData = ctx.getImageData(0, 0, 50, 50);
+          const colorCounts: Record<string, number> = {};
+          
+          for (let i = 0; i < imgData.data.length; i += 16) {
+            const r = imgData.data[i];
+            const g = imgData.data[i+1];
+            const b = imgData.data[i+2];
+            const a = imgData.data[i+3];
+            if (a < 200) continue; // skip transparent pixels
+            
+            // Quantize colors to group close shades together
+            const qr = Math.round(r / 24) * 24;
+            const qg = Math.round(g / 24) * 24;
+            const qb = Math.round(b / 24) * 24;
+            
+            const hex = "#" + [qr, qg, qb].map(v => Math.min(255, Math.max(0, v)).toString(16).padStart(2, '0')).join('');
+            colorCounts[hex] = (colorCounts[hex] || 0) + 1;
+          }
+          
+          // Sort and pick top 8 colors
+          const sortedColors = Object.entries(colorCounts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 8)
+            .map(entry => entry[0]);
+            
+          setCustomImageColors(sortedColors);
+          setCustomColorReplacements({}); // Clear previous replacements
+        }
+      } catch (err) {
+        console.error("Error extracting dominant colors", err);
+      }
+    };
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          handleImageLoad(event.target.result as string, file.name);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          handleImageLoad(event.target.result as string, file.name);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const removeCustomImage = () => {
+    setCustomImage(null);
+    setCustomImageName("");
+    setIsCustomConfirmed(false);
+    setSelectedTemplate(templates[0]); // Reset to default unicorn
+  };
+
+  // Color application to current selected region
+  const handleRegionColorApply = (color: string) => {
+    if (!selectedRegionId) return;
+    setRegionColors((prev) => ({
+      ...prev,
+      [selectedRegionId]: color,
+    }));
+    setActiveColor(color);
+  };
+
+  // Quick preset palette application
+  const applyPresetPalette = (paletteColors: string[]) => {
+    if (!selectedTemplate) return;
+    const updatedColors: Record<string, string> = {};
+    selectedTemplate.regions.forEach((region, index) => {
+      // Rotate through palette colors
+      updatedColors[region.id] = paletteColors[index % paletteColors.length];
+    });
+    setRegionColors(updatedColors);
+    
+    // Select the first one
+    if (selectedTemplate.regions.length > 0) {
+      setActiveColor(updatedColors[selectedTemplate.regions[0].id]);
+    }
+  };
+
+  // Build/Construction animation trigger
+  const startBuildAnimation = () => {
+    if (isBuilding) return;
+    setIsBuilding(true);
+    setBuildProgress(0);
+    setViewMode("mosaic");
+    if (!selectedTemplate && customImage) {
+      setIsCustomConfirmed(true);
+    }
+
+    let progress = 0;
+    if (buildIntervalRef.current) clearInterval(buildIntervalRef.current);
+
+    buildIntervalRef.current = setInterval(() => {
+      progress += 0.02;
+      if (progress >= 1) {
+        setBuildProgress(1);
+        setIsBuilding(false);
+        if (buildIntervalRef.current) clearInterval(buildIntervalRef.current);
+      } else {
+        setBuildProgress(progress);
+      }
+    }, 30);
+  };
+
+  // Download rendered image as PNG
+  const downloadMosaic = () => {
+    const canvas = document.getElementById("mosaic-canvas") as HTMLCanvasElement | null;
+    if (!canvas) return;
+
+    const dataURL = canvas.toDataURL("image/png");
+    const link = document.createElement("a");
+    link.download = `${selectedTemplate ? selectedTemplate.id : "custom"}-mozaik.png`;
+    link.href = dataURL;
+    link.click();
+  };
+
+  // AI-powered creative coloring utilizing Gemini API
+  const handleAiColorize = async () => {
+    if (!selectedTemplate || !aiPrompt.trim()) return;
+    setAiLoading(true);
+    setAiError(null);
+
+    try {
+      const response = await fetch("/api/color-template", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          templateId: selectedTemplate.id,
+          templateName: selectedTemplate.name,
+          stylePrompt: aiPrompt,
+          regions: selectedTemplate.regions.map((r) => ({ id: r.id, name: r.name })),
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Beklenmeyen bir hata oluştu.");
+      }
+
+      if (data.colorMap) {
+        setRegionColors(data.colorMap);
+        // Reset selected region highlight to match the new colors
+        if (selectedRegionId && data.colorMap[selectedRegionId]) {
+          setActiveColor(data.colorMap[selectedRegionId]);
+        }
+        // Switch to vector view to see the stunning AI painted colors first!
+        setViewMode("vector");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setAiError(err.message || "Yapay Zeka Renklendiricisi çalıştırılamadı. Lütfen tekrar deneyin.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // Compute total mosaic tiles
+  const totalTiles = (Object.values(tileStats) as Array<{ hex: string; count: number; name: string }>).reduce((sum, item) => sum + item.count, 0);
+
+  return (
+    <div className="min-h-screen bg-[#050508] text-slate-300 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200 relative overflow-hidden">
+      
+      {/* Background Radial Dots Overlay */}
+      <div className="absolute inset-0 opacity-10 pointer-events-none z-0" 
+           style={{ backgroundImage: 'radial-gradient(#4f46e5 0.5px, transparent 0.5px)', backgroundSize: '24px 24px' }}></div>
+
+      {/* Dynamic Header */}
+      <header className="border-b border-white/5 bg-[#0a0a12] sticky top-0 z-50 px-6 py-4 shadow-2xl backdrop-blur-md">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(99,102,241,0.4)] text-white shrink-0">
+              <Grid className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-xl md:text-2xl font-bold font-display tracking-widest text-white uppercase">
+                MOZAİK.GEN
+              </h1>
+              <p className="text-xs text-slate-400">
+                Görselleri el yapımı görünümlü, baskın renkleri otomatik atanmış mozaik tasarımlarına dönüştürün.
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 px-3 py-1 bg-white/5 border border-white/10 rounded-full">
+              <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></div>
+              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-300">İŞLEM MOTORU: AKTİF</span>
+            </div>
+            
+            <button
+              onClick={downloadMosaic}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-xs font-semibold transition-all shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_25px_rgba(99,102,241,0.5)] border border-indigo-500/30 flex items-center gap-2 active:scale-95"
+            >
+              <Download className="w-4 h-4" />
+              GÖRSELİ KAYDET (PNG)
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Container */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative z-10">
+        
+        {/* Left Side: Control Panel (5 cols) */}
+        <div className="lg:col-span-5 flex flex-col bg-[#0a0a12] border border-white/5 rounded-2xl overflow-hidden shadow-2xl h-fit">
+          {/* Tab Selection Row */}
+          <div className="flex border-b border-white/5 bg-black/20 p-1.5 gap-1">
+            <button
+              onClick={() => setActiveTab("design")}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-medium transition-all ${
+                activeTab === "design"
+                  ? "bg-indigo-950/40 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_15px_rgba(99,102,241,0.15)]"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <Palette className="w-4 h-4" />
+              Tasarım & Renk
+            </button>
+            <button
+              onClick={() => setActiveTab("settings")}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-medium transition-all ${
+                activeTab === "settings"
+                  ? "bg-indigo-950/40 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_15px_rgba(99,102,241,0.15)]"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <Sliders className="w-4 h-4" />
+              Mozaik Ayarları
+            </button>
+            <button
+              onClick={() => setActiveTab("stats")}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-medium transition-all ${
+                activeTab === "stats"
+                  ? "bg-indigo-950/40 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_15px_rgba(99,102,241,0.15)]"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              Malzeme Kiti ({totalTiles > 0 ? totalTiles : "-"} Adet)
+            </button>
+          </div>
+
+          <div className="p-5 flex-1 overflow-y-auto max-h-[680px]">
+            {/* TAB 1: DESIGN & COLOR */}
+            {activeTab === "design" && (
+              <div className="space-y-6">
+                
+                {/* 1. Şablon Seçici veya Özel Resim Yükleyici */}
+                <div className="space-y-3">
+                  <h3 className="text-[10px] uppercase font-bold text-slate-500 tracking-[0.2em] flex items-center gap-2">
+                    <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                    1. Çizim Şablonu Seçin
+                  </h3>
+                  
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {templates.map((temp) => (
+                      <button
+                        key={temp.id}
+                        onClick={() => {
+                          removeCustomImage();
+                          setSelectedTemplate(temp);
+                        }}
+                        className={`p-3 rounded-xl border text-left transition-all ${
+                          selectedTemplate?.id === temp.id && !customImage
+                            ? "bg-indigo-950/40 border-indigo-500/50 text-indigo-300 font-semibold shadow-[0_0_12px_rgba(99,102,241,0.2)]"
+                            : "bg-[#0a0a12] border-white/5 text-slate-400 hover:bg-white/5 hover:border-white/10"
+                        }`}
+                      >
+                        <div className="font-semibold text-xs text-slate-100 truncate">
+                          {temp.name}
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-1 truncate">
+                          {temp.regions.length} Bölge
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Drag and Drop File Uploader */}
+                  <div
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border border-dashed rounded-xl p-4 text-center cursor-pointer transition-all ${
+                      isDragging
+                        ? "border-indigo-500 bg-indigo-500/5"
+                        : customImage
+                        ? "border-indigo-500/40 bg-indigo-500/5"
+                        : "border-white/10 bg-black/30 hover:border-white/20"
+                    }`}
+                  >
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleFileChange}
+                      accept="image/*"
+                      className="hidden"
+                    />
+                    
+                    {customImage ? (
+                      <div className="flex items-center justify-between gap-3 text-left">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 shrink-0">
+                            <Check className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-indigo-400 truncate">Kendi Resminiz Yüklendi</p>
+                            <p className="text-[10px] text-slate-400 truncate">{customImageName}</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeCustomImage();
+                          }}
+                          className="p-1.5 rounded-lg bg-white/5 hover:bg-rose-500/10 hover:text-rose-400 text-slate-400 transition-all shrink-0"
+                          title="Resmi kaldır"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-1.5">
+                        <Upload className="w-6 h-6 text-slate-400" />
+                        <p className="text-xs font-medium text-slate-200">Kendi resminizi yükleyin</p>
+                        <p className="text-[10px] text-slate-400">Sürükleyin veya tıklayın (PNG, JPG)</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {selectedTemplate ? (
+                  <>
+                    {/* 2. Bölge Boyama Paneli */}
+                    <div className="space-y-3.5 border-t border-white/5 pt-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-[10px] uppercase font-bold text-slate-500 tracking-[0.2em] flex items-center gap-2">
+                          <Palette className="w-3.5 h-3.5 text-indigo-400" />
+                          2. Bölge Renkleri ve Boyama
+                        </h3>
+                        <span className="text-[10px] bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full text-slate-300 font-mono">
+                          {selectedTemplate.regions.length} PARÇA
+                        </span>
+                      </div>
+
+                      {/* Region list slider */}
+                      <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 bg-black/20 rounded-xl border border-white/5">
+                        {selectedTemplate.regions.map((region) => {
+                          const currentColor = regionColors[region.id] || region.defaultColor;
+                          const isSelected = selectedRegionId === region.id;
+                          return (
+                            <button
+                              key={region.id}
+                              onClick={() => {
+                                setSelectedRegionId(region.id);
+                                setActiveColor(currentColor);
+                              }}
+                              className={`flex items-center gap-2 p-2 rounded-lg border text-left transition-all ${
+                                isSelected
+                                  ? "bg-indigo-950/40 border-indigo-500/50 text-indigo-300"
+                                  : "bg-[#0a0a12]/60 border-transparent hover:bg-white/5"
+                              }`}
+                            >
+                              <span
+                                className="w-4 h-4 rounded-full border border-slate-700 shrink-0 shadow-sm"
+                                style={{ backgroundColor: currentColor }}
+                              />
+                              <span className="text-xs font-medium text-slate-300 truncate">
+                                {region.name}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Active Color Control */}
+                      {selectedRegionId && (
+                        <div className="p-3 bg-[#0a0a12]/80 border border-white/5 rounded-xl space-y-3">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-400">
+                              Seçili Bölge:{" "}
+                              <strong className="text-indigo-400 font-semibold">
+                                {selectedTemplate.regions.find((r) => r.id === selectedRegionId)?.name}
+                              </strong>
+                            </span>
+                            <span className="font-mono text-slate-500 uppercase">{activeColor}</span>
+                          </div>
+
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="color"
+                              value={activeColor}
+                              onChange={(e) => handleRegionColorApply(e.target.value)}
+                              className="w-10 h-10 rounded-lg cursor-pointer bg-transparent border-0 shrink-0"
+                            />
+                            
+                            {/* Fast colors wheel */}
+                            <div className="flex flex-wrap gap-1.5">
+                              {["#ef4444", "#f97316", "#facc15", "#22c55e", "#06b6d4", "#3b82f6", "#6366f1", "#a855f7", "#ec4899", "#ffffff", "#000000"].map((c) => (
+                                <button
+                                  key={c}
+                                  onClick={() => handleRegionColorApply(c)}
+                                  className={`w-5 h-5 rounded-full border transition-all ${
+                                    activeColor.toLowerCase() === c.toLowerCase()
+                                      ? "border-white scale-125 shadow-md shadow-slate-950"
+                                      : "border-white/10 hover:scale-110"
+                                  }`}
+                                  style={{ backgroundColor: c }}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 3. Hazır Paletler */}
+                    <div className="space-y-3 border-t border-white/5 pt-4">
+                      <h3 className="text-[10px] uppercase font-bold text-slate-500 tracking-[0.2em] flex items-center gap-2">
+                        <Palette className="w-3.5 h-3.5 text-indigo-400" />
+                        HAZIR SANATSAL PALET UYGULA
+                      </h3>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        {PRESET_PALETTES.map((pal) => (
+                          <button
+                            key={pal.name}
+                            onClick={() => applyPresetPalette(pal.colors)}
+                            className="p-2.5 rounded-xl bg-slate-900/40 border border-white/5 hover:bg-white/5 hover:border-white/10 transition-all text-left space-y-1.5"
+                          >
+                            <span className="text-[10px] font-medium text-slate-300 block truncate">{pal.name}</span>
+                            <div className="flex gap-0.5 overflow-hidden rounded-md">
+                              {pal.colors.slice(0, 6).map((c, i) => (
+                                <span key={i} className="h-2.5 flex-1" style={{ backgroundColor: c }} />
+                              ))}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 4. Yapay Zeka Akıllı Renklendirici */}
+                    <div className="space-y-3 border-t border-white/5 pt-4 bg-indigo-950/10 p-3 rounded-xl border border-indigo-500/10">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-[10px] uppercase font-bold text-indigo-400 tracking-[0.2em] flex items-center gap-2">
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+                          YAPAY ZEKA (AI) RENKLENDİRİCİ
+                        </h3>
+                        <span className="text-[9px] bg-indigo-500/20 text-indigo-300 font-semibold px-2 py-0.5 rounded-full border border-indigo-500/20">
+                          BETA
+                        </span>
+                      </div>
+                      
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Gemini AI şablonun hikayesini analiz eder ve yazacağınız konsepte göre uyumlu dominant renkler tasarlar!
+                      </p>
+
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={aiPrompt}
+                          onChange={(e) => setAiPrompt(e.target.value)}
+                          placeholder="Örn: Siberpunk neon, Sıcak sonbahar güneşi, Buz kraliçesi..."
+                          className="flex-1 px-3 py-2 text-xs rounded-lg bg-black/40 border border-white/10 focus:outline-none focus:border-indigo-500 text-slate-200 placeholder-slate-600 font-sans"
+                        />
+                        <button
+                          onClick={handleAiColorize}
+                          disabled={aiLoading || !aiPrompt.trim()}
+                          className="px-4 py-2 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 hover:shadow-lg hover:shadow-indigo-500/15 transition-all text-white flex items-center gap-1.5 shrink-0"
+                        >
+                          {aiLoading ? (
+                            <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                          ) : (
+                            <Sparkles className="w-3.5 h-3.5" />
+                          )}
+                          Uygula
+                        </button>
+                      </div>
+
+                      {aiError && (
+                        <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] flex items-center gap-1.5">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{aiError}</span>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="p-5 bg-indigo-950/10 border border-indigo-500/10 rounded-2xl space-y-4">
+                    {!isCustomConfirmed ? (
+                      <div className="space-y-4 text-center py-2">
+                        <div className="w-12 h-12 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-full flex items-center justify-center mx-auto">
+                          <ImageIcon className="w-6 h-6 animate-pulse" />
+                        </div>
+                        <div className="space-y-1.5">
+                          <h4 className="text-sm font-bold text-slate-200">Görsel Önizleme Modu</h4>
+                          <p className="text-xs text-slate-400 leading-relaxed max-w-xs mx-auto">
+                            Yüklediğiniz görsel şu an orijinal haliyle sağ tarafta gösteriliyor. Mozaik taşlarını oluşturmak için onaylayın.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setIsCustomConfirmed(true);
+                            setViewMode("mosaic");
+                            startBuildAnimation(); // Satisfying dynamic construction animation!
+                          }}
+                          className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl text-xs font-bold transition-all shadow-[0_0_20px_rgba(99,102,241,0.35)] hover:shadow-[0_0_25px_rgba(99,102,241,0.5)] flex items-center justify-center gap-2 active:scale-95 border border-indigo-500/30"
+                        >
+                          <Sparkles className="w-4 h-4" />
+                          GÖRSELİ MOZAİKLEŞTİR
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-3 border-b border-white/5 pb-3">
+                          <div className="w-8 h-8 bg-emerald-500/10 text-emerald-400 rounded-lg flex items-center justify-center border border-emerald-500/20">
+                            <Check className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-200">Mozaik Görünümü Aktif</h4>
+                            <p className="text-[10px] text-slate-400">Pikseller analiz edildi ve taşlar yerleştirildi.</p>
+                          </div>
+                        </div>
+
+                        {/* Custom Image Colors Replacement Panel */}
+                        {customImageColors.length > 0 && (
+                          <div className="space-y-2 border-b border-white/5 pb-3">
+                            <div className="flex items-center justify-between">
+                              <h5 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1.5">
+                                <Palette className="w-3 h-3 text-indigo-400" />
+                                Görsel Renklerini Değiştir
+                              </h5>
+                              {Object.keys(customColorReplacements).length > 0 && (
+                                <button
+                                  onClick={() => setCustomColorReplacements({})}
+                                  className="text-[9px] text-rose-400 hover:text-rose-300 transition-all font-semibold uppercase tracking-wider"
+                                >
+                                  Sıfırla
+                                </button>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto pr-1">
+                              {customImageColors.map((color, index) => {
+                                const replacement = customColorReplacements[color] || color;
+                                const hasReplaced = customColorReplacements[color] !== undefined;
+                                return (
+                                  <div
+                                    key={color}
+                                    className="flex items-center justify-between p-1.5 bg-black/30 border border-white/5 rounded-lg gap-2"
+                                  >
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <span className="w-4.5 h-4.5 rounded-full flex items-center justify-center font-mono text-[9px] font-bold bg-white/5 text-slate-300 border border-white/10 shrink-0">
+                                        {index + 1}
+                                      </span>
+                                      <span className="text-[9px] text-slate-400 font-mono truncate uppercase">{color}</span>
+                                    </div>
+                                    <input
+                                      type="color"
+                                      value={replacement}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setCustomColorReplacements(prev => ({
+                                          ...prev,
+                                          [color]: val
+                                        }));
+                                      }}
+                                      className="w-5 h-5 rounded cursor-pointer bg-transparent border-0 shrink-0"
+                                      title="Yeni rengi seç"
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          Sol paneldeki "Mozaik Ayarları" tabından mozaik parça şeklini, boyutunu ve el yapımı düzensizliğini değiştirebilirsiniz.
+                        </p>
+                        <button
+                          onClick={() => {
+                            setIsCustomConfirmed(false);
+                            setViewMode("vector");
+                          }}
+                          className="w-full py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-2"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          Orijinal Önizlemeye Geri Dön
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Manuel Mozaik Atölyesi (Sürükle, Takas Et, Sil, Taş Ekle) */}
+                {viewMode === "mosaic" && (
+                  <div className="space-y-3.5 border-t border-white/5 pt-4 bg-[#0d0e1a]/40 p-3.5 rounded-xl border border-indigo-500/10">
+                    <h3 className="text-[10px] uppercase font-bold text-indigo-400 tracking-[0.2em] flex items-center gap-2">
+                      <Layers className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+                      MANUEL MOZAİK ATÖLYESİ
+                    </h3>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      Taşları el işçiliği gibi tek tek özelleştirebilirsiniz. Bir araç seçip doğrudan sağdaki çizim panelinde mozaik taşlarına dokunun:
+                    </p>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setActiveEditTool("move")}
+                        className={`p-2 rounded-lg border text-left transition-all flex items-center gap-1.5 ${
+                          activeEditTool === "move"
+                            ? "bg-indigo-950/50 border-indigo-500/50 text-indigo-300 font-semibold"
+                            : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                        }`}
+                        title="Herhangi bir mozaik taşını farenizle sürükleyerek kaydırın"
+                      >
+                        <span className="text-xs">👋 Taşı / Sürükle</span>
+                      </button>
+
+                      <button
+                        onClick={() => setActiveEditTool("swap")}
+                        className={`p-2 rounded-lg border text-left transition-all flex items-center gap-1.5 ${
+                          activeEditTool === "swap"
+                            ? "bg-indigo-950/50 border-indigo-500/50 text-indigo-300 font-semibold"
+                            : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                        }`}
+                        title="İki taşa sırayla tıklayarak renklerini birbiriyle takas edin"
+                      >
+                        <span className="text-xs">🔄 Taşları Takas Et</span>
+                      </button>
+
+                      <button
+                        onClick={() => setActiveEditTool("erase")}
+                        className={`p-2 rounded-lg border text-left transition-all flex items-center gap-1.5 ${
+                          activeEditTool === "erase"
+                            ? "bg-indigo-950/50 border-indigo-500/50 text-indigo-300 font-semibold"
+                            : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                        }`}
+                        title="Mozaik taşını kaldırmak için üzerine tıklayın"
+                      >
+                        <span className="text-xs">❌ Parça Sil</span>
+                      </button>
+
+                      <button
+                        onClick={() => setActiveEditTool("add")}
+                        className={`p-2 rounded-lg border text-left transition-all flex items-center gap-1.5 ${
+                          activeEditTool === "add"
+                            ? "bg-indigo-950/50 border-indigo-500/50 text-indigo-300 font-semibold"
+                            : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                        }`}
+                        title="Herhangi bir boş alana tıklayarak aktif renkte yeni bir taş yerleştirin"
+                      >
+                        <span className="text-xs">➕ Yeni Taş Ekle</span>
+                      </button>
+                    </div>
+
+                    {activeEditTool === "add" && (
+                      <div className="p-2.5 bg-black/40 border border-white/5 rounded-lg space-y-1.5 mt-2">
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="text-slate-400">Eklenecek Taşın Rengi:</span>
+                          <span className="font-mono text-indigo-400 uppercase font-semibold">{activeColor}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={activeColor}
+                            onChange={(e) => setActiveColor(e.target.value)}
+                            className="w-7 h-7 rounded cursor-pointer bg-transparent border-0"
+                          />
+                          <div className="flex flex-wrap gap-1">
+                            {["#ef4444", "#f97316", "#facc15", "#22c55e", "#00d2ff", "#7000ff", "#ff007f", "#ffffff", "#000000"].map((c) => (
+                              <button
+                                key={c}
+                                onClick={() => setActiveColor(c)}
+                                className="w-3.5 h-3.5 rounded-full border border-white/10 hover:scale-110 transition-all"
+                                style={{ backgroundColor: c }}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 2: MOSAIC SETTINGS */}
+            {activeTab === "settings" && (
+              <div className="space-y-6">
+                
+                {/* Şekil ve Yapı Ayarları */}
+                <div className="space-y-4">
+                  <h3 className="text-[10px] uppercase font-bold text-slate-500 tracking-[0.2em] flex items-center gap-2">
+                    <Grid className="w-3.5 h-3.5 text-indigo-400" />
+                    MOZAİK TAŞ TÜRÜ VE BOYUTU
+                  </h3>
+
+                  {/* Shapes select */}
+                  <div className="space-y-2">
+                    <label className="text-xs text-slate-400">Mozaik Parça Şekli</label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {(["square", "rounded-square", "circle", "triangle"] as TileShape[]).map((shape) => (
+                        <button
+                          key={shape}
+                          onClick={() => setOptions((prev) => ({ ...prev, shape }))}
+                          className={`p-2 py-3 rounded-lg border text-center transition-all flex flex-col items-center gap-1.5 ${
+                            options.shape === shape
+                              ? "bg-indigo-950/40 border-indigo-500/50 text-indigo-300 font-semibold shadow-[0_0_10px_rgba(99,102,241,0.2)]"
+                              : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                          }`}
+                        >
+                          <span className={`w-3.5 h-3.5 border ${
+                            shape === "circle" ? "rounded-full" : shape === "rounded-square" ? "rounded-xs" : ""
+                          } ${options.shape === shape ? "border-indigo-400 bg-indigo-400/20" : "border-slate-500 bg-transparent"}`} 
+                          style={{
+                            clipPath: shape === "triangle" ? "polygon(50% 0%, 0% 100%, 100% 100%)" : "none"
+                          }}
+                          />
+                          <span className="text-[10px]">
+                            {shape === "square" ? "Kare" : shape === "rounded-square" ? "Yuvarlak" : shape === "circle" ? "Daire" : "Üçgen"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Tile size slider */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <label className="text-slate-300">Mozaik Parça Boyutu (Tile Size)</label>
+                      <span className="font-mono text-indigo-400 font-semibold">{options.tileSize}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="8"
+                      max="32"
+                      step="2"
+                      value={options.tileSize}
+                      onChange={(e) => setOptions((prev) => ({ ...prev, tileSize: parseInt(e.target.value) }))}
+                      className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Gap size slider */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <label className="text-slate-300">Derz / Parça Arası Boşluk (Gap)</label>
+                      <span className="font-mono text-indigo-400 font-semibold">{options.gap}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="6"
+                      step="0.5"
+                      value={options.gap}
+                      onChange={(e) => setOptions((prev) => ({ ...prev, gap: parseFloat(e.target.value) }))}
+                      className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+                </div>
+
+                {/* Düzensizlik ve Organiklik Ayarları */}
+                <div className="space-y-4 border-t border-white/5 pt-4">
+                  <h3 className="text-[10px] uppercase font-bold text-slate-500 tracking-[0.2em] flex items-center gap-2">
+                    <Sliders className="w-3.5 h-3.5 text-purple-400" />
+                    EL YAPIMI / DÜZENSİZLİK AYARI
+                  </h3>
+
+                  {/* Jitter (Irregularity) slider */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex flex-col">
+                        <label className="text-slate-300">Düzensizlik Oranı (Jitter)</label>
+                        <span className="text-[10px] text-slate-500">Doğal, kaymış/dönmüş yerleşim seviyesi</span>
+                      </div>
+                      <span className="font-mono text-indigo-400 font-semibold">%{options.jitter}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="90"
+                      step="5"
+                      value={options.jitter}
+                      onChange={(e) => setOptions((prev) => ({ ...prev, jitter: parseInt(e.target.value) }))}
+                      className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                      <span>Mükemmel Grid (Fabrika)</span>
+                      <span>Doğal El Yapımı (Mozaik)</span>
+                    </div>
+                  </div>
+
+                  {/* Grout Boundary Masking toggle */}
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-[#0a0a12]/60 border border-white/5">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs font-medium text-slate-300">Çizgi Boşluklarını Koru (Derz Payı)</span>
+                      <span className="text-[10px] text-slate-500">Taşların sınırlardan dışarı taşmasını önler</span>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={options.useGroutGaps}
+                        onChange={(e) => setOptions((prev) => ({ ...prev, useGroutGaps: e.target.checked }))}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-[#050508] border border-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-500 after:border-slate-500 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Vektör Outlines & Arka Plan */}
+                <div className="space-y-4 border-t border-white/5 pt-4">
+                  <h3 className="text-[10px] uppercase font-bold text-slate-500 tracking-[0.2em] flex items-center gap-2">
+                    <Sliders className="w-3.5 h-3.5 text-indigo-400" />
+                    SINIR ÇİZGİLERİ VE ARKA PLAN
+                  </h3>
+
+                  {/* Show outlines toggle */}
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-[#0a0a12]/60 border border-white/5">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs font-medium text-slate-300">Ana Çizgileri / Konturları Göster</span>
+                      <span className="text-[10px] text-slate-500">Mozaik üstüne orijinal vektörel çizgileri çizer</span>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={options.showOutlines}
+                        onChange={(e) => setOptions((prev) => ({ ...prev, showOutlines: e.target.checked }))}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-[#050508] border border-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-500 after:border-slate-500 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                  </div>
+
+                  {options.showOutlines && (
+                    <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-[#0a0a12]/30 border border-white/5">
+                      <div className="space-y-1">
+                        <label className="text-[10px] text-slate-500">Çizgi Rengi</label>
+                        <select
+                          value={options.outlineColor}
+                          onChange={(e) => setOptions((prev) => ({ ...prev, outlineColor: e.target.value }))}
+                          className="w-full px-2.5 py-1.5 rounded bg-[#0a0a12] border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="#ffffff">Beyaz</option>
+                          <option value="#000000">Siyah</option>
+                          <option value="#475569">Gri</option>
+                          <option value="#ffd700">Altın Sarısı</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] text-slate-500">Çizgi Kalınlığı</label>
+                        <select
+                          value={options.outlineWidth}
+                          onChange={(e) => setOptions((prev) => ({ ...prev, outlineWidth: parseFloat(e.target.value) }))}
+                          className="w-full px-2.5 py-1.5 rounded bg-[#0a0a12] border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="1">İnce (1px)</option>
+                          <option value="1.5">Orta (1.5px)</option>
+                          <option value="2.5">Kalın (2.5px)</option>
+                          <option value="4">Çok Kalın (4px)</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Background Color selector */}
+                  {selectedTemplate && (
+                    <div className="space-y-2">
+                      <label className="text-xs text-slate-400">Derz Arka Plan Dolgusu (Harç Rengi)</label>
+                      <div className="flex gap-2">
+                        {["#0d0e15", "#1e293b", "#ffffff", "#f1f5f9", "#000000"].map((bg) => (
+                          <button
+                            key={bg}
+                            onClick={() => setOptions((prev) => ({ ...prev, backgroundColor: bg }))}
+                            className={`w-8 h-8 rounded-lg border transition-all ${
+                              options.backgroundColor === bg
+                                ? "border-indigo-500 scale-110 shadow-[0_0_12px_rgba(99,102,241,0.4)]"
+                                : "border-white/10 hover:scale-105"
+                            }`}
+                            style={{ backgroundColor: bg }}
+                            title={bg}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Paint-by-Numbers Section */}
+                  <div className="space-y-3 border-t border-white/5 pt-4">
+                    <h3 className="text-[10px] uppercase font-bold text-slate-500 tracking-[0.2em] flex items-center gap-2">
+                      <Hash className="w-3.5 h-3.5 text-indigo-400" />
+                      SAYILARLA BOYAMA / KODLAMA MODU
+                    </h3>
+                    
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-[#0a0a12]/60 border border-white/5">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-xs font-medium text-slate-300">Mozaik Taşlarında Sayıları Göster</span>
+                        <span className="text-[10px] text-slate-500">Aynı renkler için aynı sayıyı veren desen oluşturur</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={showNumbers}
+                          onChange={(e) => setShowNumbers(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-[#050508] border border-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-500 after:border-slate-500 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                      </label>
+                    </div>
+
+                    {showNumbers && (
+                      <p className="text-[10px] text-amber-400/80 leading-relaxed bg-amber-500/5 p-2 rounded-lg border border-amber-500/10">
+                        💡 Sayılar aktifken, her mozaik taşının üzerinde rengine karşılık gelen kod numarası görünür. Fiziksel setlerde kolay montaj için bu şablonu takip edebilirsiniz.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: STATS / MATERIAL KIT */}
+            {activeTab === "stats" && (
+              <div className="space-y-5">
+                <div className="p-4 bg-[#0a0a12]/60 rounded-xl border border-white/5 text-xs leading-relaxed space-y-2">
+                  <h4 className="font-semibold text-slate-200 flex items-center gap-1.5">
+                    <Info className="w-4 h-4 text-indigo-400 shrink-0" />
+                    Mozaik Taş Listesi ve İstatistikleri
+                  </h4>
+                  <p className="text-slate-400 text-[11px]">
+                    Aşağıda, oluşturduğunuz tablonun fiziksel mozaik seti olarak dökümü bulunmaktadır. Taş boyutu ve boşluk ayarları değiştikçe parça adetleri dinamik olarak güncellenir.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                  <span className="text-xs text-slate-400">Tahmini Toplam Taş Sayısı:</span>
+                  <span className="text-lg font-bold font-mono text-indigo-400">{totalTiles} Adet</span>
+                </div>
+
+                <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                  {(Object.values(tileStats) as Array<{ hex: string; count: number; name: string }>).length > 0 ? (
+                    (Object.values(tileStats) as Array<{ hex: string; count: number; name: string }>)
+                      .sort((a, b) => b.count - a.count)
+                      .map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between p-3 bg-slate-900/40 rounded-xl border border-white/5 hover:bg-white/5 transition-all"
+                        >
+                          <div className="flex items-center gap-3">
+                            <span
+                              className="w-6 h-6 rounded-md border border-white/10 shadow-sm"
+                              style={{ backgroundColor: item.hex }}
+                            />
+                            <div>
+                              <p className="text-xs font-semibold text-slate-200">{item.name}</p>
+                              <p className="text-[10px] text-slate-500 font-mono uppercase">{item.hex}</p>
+                            </div>
+                          </div>
+                          
+                          <div className="text-right">
+                            <span className="text-xs font-bold font-mono text-slate-100">{item.count}</span>
+                            <span className="text-[9px] text-slate-500 block">taş</span>
+                          </div>
+                        </div>
+                      ))
+                  ) : (
+                    <div className="text-center py-8 text-slate-500 text-xs">
+                      Henüz mozaik oluşturulmadı.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Side: Interactive Workspace & Canvas (7 cols) */}
+        <div className="lg:col-span-7 flex flex-col gap-6 relative z-10">
+          
+          {/* Top Panel Actions & Phase Selection */}
+          <div className="flex items-center justify-between bg-[#0a0a12] border border-white/5 p-3 rounded-2xl shadow-2xl">
+            
+            <div className="flex items-center gap-2 p-1 bg-black/40 rounded-xl border border-white/5 shrink-0">
+              {selectedTemplate ? (
+                <button
+                  onClick={() => setViewMode("vector")}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    viewMode === "vector"
+                      ? "bg-indigo-950/50 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_12px_rgba(99,102,241,0.2)]"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  🎨 1. Boyama Sahnesi
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    setViewMode("vector");
+                    setIsCustomConfirmed(false);
+                  }}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    viewMode === "vector"
+                      ? "bg-[#6366f1]/20 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_12px_rgba(99,102,241,0.2)]"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  📸 1. Orijinal Önizleme
+                </button>
+              )}
+
+              <button
+                onClick={() => {
+                  setViewMode("mosaic");
+                  setIsCustomConfirmed(true);
+                  setBuildProgress(1); // Ensure it's fully drawn if they click directly
+                }}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  viewMode === "mosaic"
+                    ? "bg-indigo-950/50 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_12px_rgba(99,102,241,0.2)]"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                🧩 2. Mozaik Görünümü
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={startBuildAnimation}
+                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)] hover:shadow-[0_0_20px_rgba(99,102,241,0.5)] border border-indigo-500/30 flex items-center gap-1.5 active:scale-95"
+                title="Sıfırdan parça parça dökülerek inşa etme animasyonu"
+              >
+                <Play className="w-3.5 h-3.5 fill-white" />
+                İnşa Animasyonu
+              </button>
+            </div>
+          </div>
+
+          {/* Interactive Workspace / Canvas Card */}
+          <div className="flex-1 bg-[#06060c] border border-white/5 rounded-2xl p-6 shadow-2xl flex flex-col items-center justify-center relative overflow-hidden group min-h-[560px]">
+            
+            {/* Background Grid Pattern inside Canvas Container */}
+            <div className="absolute inset-0 opacity-5 pointer-events-none z-0" 
+                 style={{ backgroundImage: "radial-gradient(#4f46e5 0.5px, transparent 0.5px)", backgroundSize: "24px 24px" }} />
+
+            {/* The Mosaic Render Canvas Container */}
+            <div className="w-full max-w-[500px] aspect-square relative z-10">
+              <MosaicCanvas
+                template={selectedTemplate}
+                regionColors={regionColors}
+                selectedRegionId={selectedRegionId}
+                onRegionSelect={(id) => {
+                  setSelectedRegionId(id);
+                  if (regionColors[id]) {
+                    setActiveColor(regionColors[id]);
+                  }
+                  setActiveTab("design");
+                }}
+                options={options}
+                customImage={customImage}
+                viewMode={viewMode}
+                buildProgress={buildProgress}
+                onTileStatsChange={(stats) => setTileStats(stats)}
+                customImageColors={customImageColors}
+                customColorReplacements={customColorReplacements}
+                showNumbers={showNumbers}
+                activeEditTool={activeEditTool}
+                activeColor={activeColor}
+              />
+            </div>
+
+            {/* Explanatory Overlay */}
+            <div className="w-full max-w-lg mt-6 flex gap-3 text-slate-400 text-xs p-3.5 rounded-xl bg-[#0a0a12]/60 border border-white/5 relative z-10">
+              <HelpCircle className="w-4 h-4 text-indigo-400 shrink-0" />
+              <div className="space-y-1 text-[11px] leading-relaxed">
+                {selectedTemplate ? (
+                  viewMode === "vector" ? (
+                    <p>
+                      <strong className="text-slate-200">1. Boyama Aşamasındasınız:</strong> Şablonun istediğiniz bölgesine dokunarak veya tıklayarak rengini değiştirebilirsiniz. Renkleriniz tamamsa yukarıdan <strong>Mozaik Görünümü</strong>'ne geçiş yapın!
+                    </p>
+                  ) : (
+                    <p>
+                      <strong className="text-slate-200">2. Mozaik Görünümündesiniz:</strong> Taşlar, şablona göre <strong>organik, hafif düzensiz ve döndürülmüş açılarla</strong> yerleştirildi. Mozaik Boyutu ve Düzensizlik ayarları ile oynayarak tasarımı gerçek el işçiliği gibi hassaslaştırabilirsiniz.
+                    </p>
+                  )
+                ) : (
+                  viewMode === "vector" ? (
+                    <p>
+                      <strong className="text-slate-200">1. Orijinal Görsel Önizleme:</strong> Yüklediğiniz görsel şu an orijinal haliyle önizleniyor. Mozaik taşlarını oluşturmak için sol taraftaki <strong>Görseli Mozaikleştir</strong> butonuna tıklayabilirsiniz.
+                    </p>
+                  ) : (
+                    <p>
+                      <strong className="text-slate-200">2. Mozaik Görünümündesiniz:</strong> Görselinizdeki pikseller analiz edilerek mozaik taşlarına dönüştürüldü. Mozaik Boyutu, Boşluk ve Düzensizlik ayarlarını sol paneldeki sekmelerden değiştirebilirsiniz.
+                    </p>
+                  )
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Footer info and design details styled as a status-bar info track */}
+      <footer className="h-10 border-t border-white/5 bg-[#0a0a12] flex items-center justify-between px-8 text-[10px] font-mono text-slate-500 shrink-0 relative z-20">
+        <div className="flex items-center gap-4">
+          <span>© 2026 MOZAİK.GEN</span>
+          <span className="text-slate-700">|</span>
+          <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> ENGINE ONLINE</span>
+        </div>
+        <div className="hidden sm:flex items-center gap-4">
+          <span>GPU ACCELERATED</span>
+          <span className="text-slate-700">|</span>
+          <span>LATENCY: 14MS</span>
+          <span className="text-slate-700">|</span>
+          <span>V 0.9.6 PREVIEW</span>
+        </div>
+      </footer>
+    </div>
+  );
+}

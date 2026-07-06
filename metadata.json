@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Mozaik Sanat Stüdyosu v2",
+  "description": "Vektörel görselleri ve resimleri, aynı boyutta ama organik/düzensiz şekilde dizilmiş mozaik parçalarına bölen ve her parçaya bölgenin baskın renklerini otomatik atayan eğlenceli ve yaratıcı bir stüdyo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
