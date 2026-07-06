@@ -42,6 +42,11 @@ export default function App() {
   // Custom color count state
   const [colorCount, setColorCount] = useState<number>(6);
   
+  // Suggested optimal colors states
+  const [suggestedColorCount, setSuggestedColorCount] = useState<number | null>(null);
+  const [suggestedColors, setSuggestedColors] = useState<string[]>([]);
+  const [suggestedColorsNames, setSuggestedColorsNames] = useState<string[]>([]);
+  
   // Build progression state (for construction animation)
   const [buildProgress, setBuildProgress] = useState<number>(1);
   const [isBuilding, setIsBuilding] = useState<boolean>(false);
@@ -219,6 +224,121 @@ export default function App() {
       console.error("Error reducing image colors dynamically:", err);
     }
   }, [customImage, colorCount]);
+
+  // Compute recommended optimal color count based on actual pixel distribution across BASIC_ANCHORS
+  useEffect(() => {
+    if (!customImage) {
+      setSuggestedColorCount(null);
+      setSuggestedColors([]);
+      setSuggestedColorsNames([]);
+      return;
+    }
+
+    try {
+      const tempCanvas = document.createElement("canvas");
+      const ctx = tempCanvas.getContext("2d");
+      if (ctx) {
+        tempCanvas.width = 100;
+        tempCanvas.height = 100;
+        ctx.drawImage(customImage, 0, 0, 100, 100);
+        const imgData = ctx.getImageData(0, 0, 100, 100);
+
+        const BASIC_ANCHORS = [
+          { hex: "#e11d48", name: "Kırmızı" },
+          { hex: "#ea580c", name: "Turuncu" },
+          { hex: "#facc15", name: "Sarı" },
+          { hex: "#16a34a", name: "Yeşil" },
+          { hex: "#2563eb", name: "Mavi" },
+          { hex: "#7c3aed", name: "Mor" },
+          { hex: "#78350f", name: "Kahverengi" },
+          { hex: "#db2777", name: "Pembe" },
+          { hex: "#0d9488", name: "Turkuaz" },
+          { hex: "#f8fafc", name: "Beyaz" },
+          { hex: "#1e293b", name: "Siyah" },
+          { hex: "#64748b", name: "Gri" }
+        ];
+
+        const getRgbFromHex = (hex: string) => {
+          const clean = hex.replace("#", "");
+          const r = parseInt(clean.substring(0, 2), 16) || 0;
+          const g = parseInt(clean.substring(2, 4), 16) || 0;
+          const b = parseInt(clean.substring(4, 6), 16) || 0;
+          return { r, g, b };
+        };
+
+        const anchorRgbList = BASIC_ANCHORS.map(a => ({
+          ...a,
+          rgb: getRgbFromHex(a.hex)
+        }));
+
+        const counts: Record<string, number> = {};
+        let totalValidPixels = 0;
+
+        for (let i = 0; i < imgData.data.length; i += 4) {
+          const r = imgData.data[i];
+          const g = imgData.data[i+1];
+          const b = imgData.data[i+2];
+          const a = imgData.data[i+3];
+          if (a < 180) continue; // transparent pixel
+
+          totalValidPixels++;
+
+          let closestHex = anchorRgbList[0].hex;
+          let minDist = Infinity;
+          for (const anchor of anchorRgbList) {
+            const dist = Math.hypot(r - anchor.rgb.r, g - anchor.rgb.g, b - anchor.rgb.b);
+            if (dist < minDist) {
+              minDist = dist;
+              closestHex = anchor.hex;
+            }
+          }
+          counts[closestHex] = (counts[closestHex] || 0) + 1;
+        }
+
+        // Keep anchors that represent at least 3.5% of total valid pixels to avoid minor noises
+        const threshold = totalValidPixels * 0.035;
+        const significantAnchors = anchorRgbList.filter(anchor => {
+          const pCount = counts[anchor.hex] || 0;
+          return pCount > threshold;
+        });
+
+        // Sort by frequency (descending)
+        significantAnchors.sort((a, b) => {
+          const countA = counts[a.hex] || 0;
+          const countB = counts[b.hex] || 0;
+          return countB - countA;
+        });
+
+        // Clamp the recommended color count between 4 and 10 for absolute clarity and high quality
+        let recCount = significantAnchors.length;
+        if (recCount < 4) recCount = 4;
+        if (recCount > 10) recCount = 10;
+
+        // If we have fewer actual significant colors than recCount, pad with sorted top frequencies
+        const sortedAllAnchors = [...anchorRgbList].sort((a, b) => (counts[b.hex] || 0) - (counts[a.hex] || 0));
+        const finalList: typeof anchorRgbList = [];
+        
+        // Add significant anchors first
+        significantAnchors.forEach(sa => {
+          if (finalList.length < recCount) finalList.push(sa);
+        });
+        
+        // Pad if needed
+        for (const anchor of sortedAllAnchors) {
+          if (finalList.length >= recCount) break;
+          if (!finalList.some(fa => fa.hex === anchor.hex)) {
+            finalList.push(anchor);
+          }
+        }
+
+        setSuggestedColorCount(recCount);
+        setSuggestedColors(finalList.map(a => a.hex));
+        setSuggestedColorsNames(finalList.map(a => a.name));
+      }
+    } catch (err) {
+      console.error("Error running optimal color analysis:", err);
+    }
+  }, [customImage]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -731,6 +851,57 @@ export default function App() {
                         Görseldeki renkleri birbirine benzemeyen {colorCount} ana renge indirger (Sarı, Mavi, Kırmızı, Kahverengi vb.).
                       </p>
                     </div>
+
+                    {/* Akıllı Renk Analiz Raporu */}
+                    {suggestedColorCount !== null && (
+                      <div className="bg-gradient-to-br from-indigo-950/40 to-purple-950/40 border border-indigo-500/20 p-3 rounded-xl text-left space-y-2.5">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-300">
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                          💡 Akıllı Renk Analizi Raporu
+                        </div>
+                        <div className="text-[11px] text-slate-300 leading-relaxed">
+                          Görseliniz analiz edildi. Birbirinin benzeri olmayan <span className="text-amber-400 font-bold">{suggestedColorCount} adet temel renk</span> grubu tespit edildi:
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {suggestedColors.map((color, idx) => (
+                            <span 
+                              key={color}
+                              className="inline-flex items-center gap-1 bg-black/40 border border-white/5 text-[9px] text-slate-200 px-2 py-0.5 rounded"
+                            >
+                              <span 
+                                className="w-2 h-2 rounded-full border border-white/10" 
+                                style={{ backgroundColor: color }} 
+                              />
+                              {suggestedColorsNames[idx] || "Renk"}
+                            </span>
+                          ))}
+                        </div>
+                        <p className="text-[10px] text-slate-400 leading-relaxed">
+                          Sarı, Mavi, Kırmızı gibi ana renkler gruplanmıştır. Benzer tonlar birleştirilerek sadeleştirilmiştir.
+                        </p>
+                        
+                        {colorCount !== suggestedColorCount ? (
+                          <button
+                            onClick={() => {
+                              setColorCount(suggestedColorCount);
+                              if (!isCustomConfirmed) {
+                                setIsCustomConfirmed(true);
+                                setViewMode("mosaic");
+                                startBuildAnimation();
+                              }
+                            }}
+                            className="w-full py-1.5 px-3 bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1.5"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            {!isCustomConfirmed ? "Öneriyi Uygula & Mozaikleştir" : `Önerilen ${suggestedColorCount} Rengi Uygula`}
+                          </button>
+                        ) : (
+                          <div className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1 justify-center bg-emerald-500/10 p-1 rounded-lg border border-emerald-500/20">
+                            <Check className="w-3.5 h-3.5" /> Önerilen akıllı ayarlar şu an aktif!
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {!isCustomConfirmed ? (
                       <div className="space-y-4 text-center py-2">
