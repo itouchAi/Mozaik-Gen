@@ -91,6 +91,18 @@ export default function App() {
   const [isAnalyzingObjects, setIsAnalyzingObjects] = useState<boolean>(false);
   const [objectAnalysisError, setObjectAnalysisError] = useState<string | null>(null);
 
+  // Manual Drawing & Segment Edit States
+  const [segmentationTool, setSegmentationTool] = useState<"auto" | "pen">("auto");
+  const [manualDrawPoints, setManualDrawPoints] = useState<number[][]>([]);
+  const [isDrawingClosed, setIsDrawingClosed] = useState<boolean>(false);
+  const [manualDrawWarning, setManualDrawWarning] = useState<string | null>(null);
+
+  const handleUpdateObjectPolygon = (id: string, newPolygon: number[][]) => {
+    setDetectedObjects((prev) =>
+      prev.map((obj) => (obj.id === id ? { ...obj, polygon: newPolygon } : obj))
+    );
+  };
+
   const detectObjectsFromImage = async () => {
     if (!customImage) return;
     setIsAnalyzingObjects(true);
@@ -1637,6 +1649,12 @@ export default function App() {
                     prev.includes(id) ? prev.filter((oid) => oid !== id) : [...prev, id]
                   );
                 }}
+                segmentationTool={segmentationTool}
+                manualDrawPoints={manualDrawPoints}
+                onUpdateManualDrawPoints={setManualDrawPoints}
+                isDrawingClosed={isDrawingClosed}
+                onSetDrawingClosed={setIsDrawingClosed}
+                onUpdateObjectPolygon={handleUpdateObjectPolygon}
               />
 
               {/* Scanning visual radar effect wrapper */}
@@ -1702,65 +1720,193 @@ export default function App() {
             {/* Interactive Object Selection and Mosaic List */}
             {viewMode === "objects" && (
               <div className="w-full max-w-lg mt-4 bg-[#0a0a12] border border-white/5 rounded-2xl p-5 shadow-2xl space-y-4 relative z-10 text-left">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between border-b border-white/5 pb-3">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center">
                       <Target className="w-4 h-4" />
                     </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-100 uppercase tracking-wider">🎯 Seçici Nesne Mozaikleme</h4>
-                      <p className="text-[10px] text-slate-400">Görseldeki nesneleri tıklayarak bağımsız mozaiklere dönüştürün.</p>
+                      <p className="text-[10px] text-slate-400">Görseldeki nesneleri seçerek bağımsız mozaiklere dönüştürün.</p>
                     </div>
                   </div>
+                  {segmentationTool === "auto" && (
+                    <button
+                      onClick={detectObjectsFromImage}
+                      disabled={isAnalyzingObjects}
+                      className="px-3 py-1.5 rounded-lg text-[10px] font-semibold bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-all flex items-center gap-1 active:scale-95 disabled:opacity-50"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Yeniden Analiz Et
+                    </button>
+                  )}
+                </div>
+
+                {/* Sub-tool Selector Tabs */}
+                <div className="flex bg-black/40 p-1 rounded-xl border border-white/5">
                   <button
-                    onClick={detectObjectsFromImage}
-                    disabled={isAnalyzingObjects}
-                    className="px-3 py-1.5 rounded-lg text-[10px] font-semibold bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-all flex items-center gap-1 active:scale-95 disabled:opacity-50"
+                    onClick={() => {
+                      setSegmentationTool("auto");
+                      setManualDrawWarning(null);
+                    }}
+                    className={`flex-1 py-2 rounded-lg text-xs font-bold text-center transition-all ${
+                      segmentationTool === "auto"
+                        ? "bg-indigo-600/25 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_10px_rgba(99,102,241,0.1)]"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
                   >
-                    <RefreshCw className="w-3 h-3" />
-                    Yeniden Analiz Et
+                    🎯 Otomatik Nesne Seçimi
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSegmentationTool("pen");
+                      setManualDrawWarning(null);
+                    }}
+                    className={`flex-1 py-2 rounded-lg text-xs font-bold text-center transition-all ${
+                      segmentationTool === "pen"
+                        ? "bg-indigo-600/25 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_10px_rgba(99,102,241,0.1)]"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    ✏️ Manuel Kalem Çizimi
                   </button>
                 </div>
 
-                {detectedObjects.length > 0 ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    {detectedObjects.map((obj) => {
-                      const isSelected = selectedObjectIds.includes(obj.id);
-                      const isHovered = obj.id === hoveredObjectId;
-                      return (
-                        <div
-                          key={obj.id}
-                          onMouseEnter={() => setHoveredObjectId(obj.id)}
-                          onMouseLeave={() => setHoveredObjectId(null)}
-                          onClick={() => {
-                            setSelectedObjectIds((prev) =>
-                              prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]
-                            );
-                          }}
-                          className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex items-center justify-between gap-3 ${
-                            isSelected
-                              ? "bg-indigo-950/40 border-indigo-500/50 text-indigo-300 shadow-[0_0_12px_rgba(99,102,241,0.15)]"
-                              : isHovered
-                              ? "bg-white/5 border-white/20 text-slate-200"
-                              : "bg-black/20 border-white/5 text-slate-400 hover:bg-white/5"
-                          }`}
-                        >
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-semibold truncate">{obj.name}</p>
-                            <p className="text-[9px] text-slate-500 font-mono">Bölge: %{Math.round((obj.box[2] - obj.box[0]) * (obj.box[3] - obj.box[1]))}</p>
-                          </div>
-                          <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
-                            isSelected ? "border-indigo-500 bg-indigo-500 text-white" : "border-white/10 bg-black/40"
-                          }`}>
-                            {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                          </div>
-                        </div>
-                      );
-                    })}
+                {/* Warning Banner for Unclosed Paths */}
+                {manualDrawWarning && (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-start justify-between gap-2 text-[11px] text-rose-400 leading-relaxed animate-pulse">
+                    <span>⚠️ {manualDrawWarning}</span>
+                    <button
+                      onClick={() => setManualDrawWarning(null)}
+                      className="text-rose-400 hover:text-rose-300 font-bold shrink-0 px-1"
+                    >
+                      ✕
+                    </button>
                   </div>
-                ) : (
-                  <div className="text-center py-6 bg-black/20 rounded-xl border border-white/5">
-                    <p className="text-xs text-slate-400">Görsel nesneleri yükleniyor, lütfen bekleyin...</p>
+                )}
+
+                {/* Tab content 1: AUTO */}
+                {segmentationTool === "auto" && (
+                  <div className="space-y-3">
+                    <p className="text-[10px] text-slate-400 italic bg-white/5 p-2 rounded-lg border border-white/5">
+                      💡 <strong>Sınır Çizgilerini Genişletme:</strong> Seçtiğiniz nesnelerin sınırlarını daha hassas hale getirmek veya genişletmek için görsel üstündeki <strong>altın renkli noktaları</strong> dilediğiniz gibi sürükleyebilirsiniz!
+                    </p>
+
+                    {detectedObjects.length > 0 ? (
+                      <div className="grid grid-cols-2 gap-2">
+                        {detectedObjects.map((obj) => {
+                          const isSelected = selectedObjectIds.includes(obj.id);
+                          const isHovered = obj.id === hoveredObjectId;
+                          return (
+                            <div
+                              key={obj.id}
+                              onMouseEnter={() => setHoveredObjectId(obj.id)}
+                              onMouseLeave={() => setHoveredObjectId(null)}
+                              onClick={() => {
+                                setSelectedObjectIds((prev) =>
+                                  prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]
+                                );
+                              }}
+                              className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex items-center justify-between gap-3 ${
+                                isSelected
+                                  ? "bg-indigo-950/40 border-indigo-500/50 text-indigo-300 shadow-[0_0_12px_rgba(99,102,241,0.15)]"
+                                  : isHovered
+                                  ? "bg-white/5 border-white/20 text-slate-200"
+                                  : "bg-black/20 border-white/5 text-slate-400 hover:bg-white/5"
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-semibold truncate">{obj.name}</p>
+                                <p className="text-[9px] text-slate-500 font-mono">Bölge: %{Math.round((obj.box[2] - obj.box[0]) * (obj.box[3] - obj.box[1]))}</p>
+                              </div>
+                              <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                isSelected ? "border-indigo-500 bg-indigo-500 text-white" : "border-white/10 bg-black/40"
+                              }`}>
+                                {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="text-center py-6 bg-black/20 rounded-xl border border-white/5">
+                        <p className="text-xs text-slate-400">Görsel nesneleri yükleniyor, lütfen bekleyin...</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Tab content 2: PEN (Manual drawing) */}
+                {segmentationTool === "pen" && (
+                  <div className="space-y-4">
+                    <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5 space-y-1.5 text-[11px] text-slate-300 leading-relaxed">
+                      <p className="font-bold text-slate-200 flex items-center gap-1.5">
+                        ✍️ Manuel Kalem Nasıl Çalışır?
+                      </p>
+                      <ul className="list-decimal pl-4 space-y-1 text-slate-400 text-[10px]">
+                        <li>Görsel üzerinde sırayla tıklayarak sınır noktaları oluşturun.</li>
+                        <li>Sınırı kapatmak için <strong>yeşil parlayan başlangıç noktasına</strong> tekrar tıklayın.</li>
+                        <li>Yolları dilediğiniz gibi kapatıp ardından <strong>"Sınırı Nesne Olarak Kaydet"</strong> butonuna basarak mozaikleştirebilirsiniz.</li>
+                      </ul>
+                    </div>
+
+                    <div className="flex items-center justify-between bg-black/30 p-3 rounded-xl border border-white/5">
+                      <div className="text-[11px]">
+                        <span className="text-slate-400 block">Dizilen Nokta Sayısı:</span>
+                        <strong className="text-slate-200 font-mono text-xs">{manualDrawPoints.length} Adet</strong>
+                      </div>
+                      <div className="text-[11px]">
+                        <span className="text-slate-400 block">Sınır Durumu:</span>
+                        <strong className={`font-mono text-xs ${isDrawingClosed ? "text-emerald-400 animate-pulse" : "text-amber-400"}`}>
+                          {isDrawingClosed ? "🟢 KAPALI / TAMAMLANDI" : "🟡 AÇIK / BİRLEŞTİRİLMEDİ"}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setManualDrawPoints([]);
+                          setIsDrawingClosed(false);
+                          setManualDrawWarning(null);
+                        }}
+                        className="flex-1 py-2 rounded-xl text-xs font-semibold bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-all text-center active:scale-95"
+                      >
+                        🗑️ Çizimi Temizle
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!isDrawingClosed || manualDrawPoints.length < 3) {
+                            setManualDrawWarning("Sınır kapatılmamış! Lütfen çizimin başlangıç ve bitiş uçlarını (parıldayan yeşil halkayı) birleştirerek kapalı bir bölge oluşturun.");
+                            return;
+                          }
+
+                          const newId = `manual_${Date.now()}`;
+                          const xs = manualDrawPoints.map((p) => p[0]);
+                          const ys = manualDrawPoints.map((p) => p[1]);
+                          const xmin = Math.min(...xs);
+                          const xmax = Math.max(...xs);
+                          const ymin = Math.min(...ys);
+                          const ymax = Math.max(...ys);
+
+                          const newObj = {
+                            id: newId,
+                            name: `Manuel Çizim ${detectedObjects.filter((o) => o.id.startsWith("manual_")).length + 1}`,
+                            box: [ymin, xmin, ymax, xmax],
+                            polygon: [...manualDrawPoints],
+                          };
+
+                          setDetectedObjects((prev) => [...prev, newObj]);
+                          setSelectedObjectIds((prev) => [...prev, newId]);
+                          setManualDrawPoints([]);
+                          setIsDrawingClosed(false);
+                          setManualDrawWarning(null);
+                        }}
+                        className="flex-1 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all text-center active:scale-95 shadow-[0_0_15px_rgba(99,102,241,0.25)]"
+                      >
+                        💾 Sınırı Nesne Yap
+                      </button>
+                    </div>
                   </div>
                 )}
 

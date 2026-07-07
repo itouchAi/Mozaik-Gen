@@ -40,6 +40,14 @@ interface MosaicCanvasProps {
   hoveredObjectId?: string | null;
   onHoverObject?: (id: string | null) => void;
   onSelectObject?: (id: string) => void;
+
+  // Manual draw and edit props
+  segmentationTool?: "auto" | "pen";
+  manualDrawPoints?: number[][];
+  onUpdateManualDrawPoints?: (points: number[][]) => void;
+  isDrawingClosed?: boolean;
+  onSetDrawingClosed?: (closed: boolean) => void;
+  onUpdateObjectPolygon?: (id: string, polygon: number[][]) => void;
 }
 
 // Check if a point (px, py) is inside a normalized polygon [[x1,y1], [x2,y2], ...] (coordinates 0 to 100)
@@ -321,11 +329,22 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   hoveredObjectId = null,
   onHoverObject,
   onSelectObject,
+  segmentationTool = "auto",
+  manualDrawPoints = [],
+  onUpdateManualDrawPoints,
+  isDrawingClosed = false,
+  onSetDrawingClosed,
+  onUpdateObjectPolygon,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [hoveredRegionId, setHoveredRegionId] = useState<string | null>(null);
   const [edgeData, setEdgeData] = useState<ImageData | null>(null);
   const [uploadedImgData, setUploadedImgData] = useState<ImageData | null>(null);
+
+  // States for vertex dragging and manual pen drawing
+  const [draggedVertex, setDraggedVertex] = useState<{ objId: string; pointIndex: number } | null>(null);
+  const [hoveredVertex, setHoveredVertex] = useState<{ objId: string; pointIndex: number } | null>(null);
+  const [mousePreviewPos, setMousePreviewPos] = useState<{ x: number; y: number } | null>(null);
 
   // Local high-precision edge-aware object polygon generator (Magic Wand & Contour Refinement)
   const getObjectPolygon = useCallback((obj: { id: string; box: number[]; polygon?: number[][] }): number[][] => {
@@ -701,11 +720,29 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
           if (viewMode === "objects") {
             const px = (x / width) * 100;
             const py = (y / height) * 100;
+            // Pad for half-size plus gap and a tiny rotation buffer to keep tiles strictly inside
+            const padX = ((hStep * 1.15 + options.gap * 0.5) / width) * 100;
+            const padY = ((hStep * 1.15 + options.gap * 0.5) / height) * 100;
+
             const isInsideSelected = selectedObjectIds.some(id => {
               const obj = detectedObjects.find(o => o.id === id);
               if (!obj) return false;
               const poly = getObjectPolygon(obj);
-              return isPointInPolygon(px, py, poly);
+              
+              // Verify center and outer extremities of the tile's physical footprint are strictly inside the polygon
+              const pointsToCheck = [
+                [px, py],
+                [px - padX, py - padY],
+                [px + padX, py - padY],
+                [px - padX, py + padY],
+                [px + padX, py + padY],
+                [px - padX, py],
+                [px + padX, py],
+                [px, py - padY],
+                [px, py + padY]
+              ];
+              
+              return pointsToCheck.every(([cx, cy]) => isPointInPolygon(cx, cy, poly));
             });
             if (!isInsideSelected) continue;
           }
@@ -1024,6 +1061,98 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
           ctx.restore();
         });
       }
+
+      // 4. Draw interactive vertex handles for selected objects so the user can drag and expand/reshape them
+      if (detectedObjects && detectedObjects.length > 0) {
+        detectedObjects.forEach((obj) => {
+          const isSelected = selectedObjectIds.includes(obj.id);
+          if (!isSelected) return; // Only show handles for selected objects to avoid clutter
+
+          const polyPoints = getObjectPolygon(obj);
+          polyPoints.forEach(([px, py], idx) => {
+            const cx = (px / 100) * width;
+            const cy = (py / 100) * height;
+
+            const isHoveredNode = hoveredVertex && hoveredVertex.objId === obj.id && hoveredVertex.pointIndex === idx;
+            const isDraggedNode = draggedVertex && draggedVertex.objId === obj.id && draggedVertex.pointIndex === idx;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(cx, cy, (isHoveredNode || isDraggedNode) ? 7 : 5, 0, Math.PI * 2);
+            ctx.fillStyle = isDraggedNode ? "#ef4444" : isHoveredNode ? "#818cf8" : "#ffd700";
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1.5;
+            ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
+            ctx.shadowBlur = 4;
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          });
+        });
+      }
+
+      // 5. Draw manual pen drawing path
+      if (manualDrawPoints && manualDrawPoints.length > 0) {
+        ctx.save();
+        
+        // Draw the closed/open polygon region
+        ctx.beginPath();
+        manualDrawPoints.forEach(([px, py], idx) => {
+          const cx = (px / 100) * width;
+          const cy = (py / 100) * height;
+          if (idx === 0) {
+            ctx.moveTo(cx, cy);
+          } else {
+            ctx.lineTo(cx, cy);
+          }
+        });
+
+        // Draw line to current mouse position if not closed
+        if (!isDrawingClosed && mousePreviewPos) {
+          ctx.lineTo(mousePreviewPos.x, mousePreviewPos.y);
+        }
+
+        if (isDrawingClosed) {
+          ctx.closePath();
+          ctx.fillStyle = "rgba(99, 102, 241, 0.15)";
+          ctx.fill();
+          ctx.strokeStyle = "#6366f1";
+          ctx.lineWidth = 2.5;
+        } else {
+          ctx.strokeStyle = "#818cf8";
+          ctx.lineWidth = 2.0;
+          ctx.setLineDash([4, 4]);
+        }
+        ctx.stroke();
+        ctx.restore();
+
+        // Draw the points (dots) on the manual drawing
+        manualDrawPoints.forEach(([px, py], idx) => {
+          const cx = (px / 100) * width;
+          const cy = (py / 100) * height;
+          const isFirst = idx === 0;
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(cx, cy, isFirst ? 6 : 4, 0, Math.PI * 2);
+          // Make first point green if open to guide the user to click to close
+          ctx.fillStyle = isFirst && !isDrawingClosed ? "#10b981" : "#3b82f6";
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.5;
+          ctx.fill();
+          ctx.stroke();
+          
+          if (isFirst && !isDrawingClosed) {
+            // Pulsing ring for closing point
+            ctx.beginPath();
+            ctx.arc(cx, cy, 10 + Math.sin(Date.now() / 150) * 3, 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(16, 185, 129, 0.5)";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
+          ctx.restore();
+        });
+      }
     } else if (viewMode === "mosaic" || viewMode === "guide") {
       // MOSAIC RENDER & GUIDE MODE - Consume state `tiles`
 
@@ -1127,7 +1256,13 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     swapSelectedTileId,
     detectedObjects,
     selectedObjectIds,
-    hoveredObjectId
+    hoveredObjectId,
+    segmentationTool,
+    manualDrawPoints,
+    isDrawingClosed,
+    mousePreviewPos,
+    draggedVertex,
+    hoveredVertex
   ]);
 
   // 3. INTERACTIVE COORDINATE & TILE SELECTION HELPERS
@@ -1258,6 +1393,61 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (viewMode === "objects") {
+      const coords = getCanvasCoords(e);
+      if (!coords) return;
+
+      // Handle manual drawing pen tool
+      if (segmentationTool === "pen") {
+        if (isDrawingClosed) return; // Wait for they clear or confirm
+
+        const width = template ? template.width : 500;
+        const height = template ? template.height : 500;
+        const px = (coords.x / width) * 100;
+        const py = (coords.y / height) * 100;
+
+        // If clicking within a close range to the first point, snap and close the path
+        if (manualDrawPoints && manualDrawPoints.length >= 3) {
+          const firstPoint = manualDrawPoints[0];
+          const firstX = (firstPoint[0] / 100) * width;
+          const firstY = (firstPoint[1] / 100) * height;
+          const dist = Math.hypot(coords.x - firstX, coords.y - firstY);
+          
+          if (dist < 12) {
+            onSetDrawingClosed?.(true);
+            setMousePreviewPos(null);
+            return;
+          }
+        }
+
+        // Add the point
+        const updatedPoints = [...manualDrawPoints, [px, py]];
+        onUpdateManualDrawPoints?.(updatedPoints);
+        return;
+      }
+
+      // Check if clicking near any vertex of currently selected objects to initiate dragging
+      if (detectedObjects && detectedObjects.length > 0) {
+        const width = template ? template.width : 500;
+        const height = template ? template.height : 500;
+
+        for (const obj of detectedObjects) {
+          if (!selectedObjectIds.includes(obj.id)) continue;
+          const polyPoints = getObjectPolygon(obj);
+          for (let idx = 0; idx < polyPoints.length; idx++) {
+            const [px, py] = polyPoints[idx];
+            const cx = (px / 100) * width;
+            const cy = (py / 100) * height;
+            const dist = Math.hypot(coords.x - cx, coords.y - cy);
+            if (dist < 10) {
+              setDraggedVertex({ objId: obj.id, pointIndex: idx });
+              setIsMouseDown(true);
+              return;
+            }
+          }
+        }
+      }
+
+      // Default regular click selection
       handleCanvasClick(e);
       return;
     }
@@ -1322,7 +1512,61 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const coords = getCanvasCoords(e);
+    if (!coords) return;
+
     if (viewMode === "objects") {
+      const width = template ? template.width : 500;
+      const height = template ? template.height : 500;
+
+      // Update manual draw mouse preview line
+      if (segmentationTool === "pen" && manualDrawPoints && manualDrawPoints.length > 0 && !isDrawingClosed) {
+        setMousePreviewPos({ x: coords.x, y: coords.y });
+      } else {
+        setMousePreviewPos(null);
+      }
+
+      // Vertex dragging
+      if (draggedVertex && isMouseDown && onUpdateObjectPolygon) {
+        const px = Math.max(0, Math.min(100, (coords.x / width) * 100));
+        const py = Math.max(0, Math.min(100, (coords.y / height) * 100));
+
+        const targetObj = detectedObjects.find(o => o.id === draggedVertex.objId);
+        if (targetObj) {
+          const originalPoly = getObjectPolygon(targetObj);
+          const updatedPoly = originalPoly.map((pt, idx) => idx === draggedVertex.pointIndex ? [px, py] : pt);
+          onUpdateObjectPolygon(draggedVertex.objId, updatedPoly);
+        }
+        return;
+      }
+
+      // Hover over vertex highlight
+      let foundHoverVertex = null;
+      if (detectedObjects && detectedObjects.length > 0) {
+        for (const obj of detectedObjects) {
+          if (!selectedObjectIds.includes(obj.id)) continue;
+          const polyPoints = getObjectPolygon(obj);
+          for (let idx = 0; idx < polyPoints.length; idx++) {
+            const [px, py] = polyPoints[idx];
+            const cx = (px / 100) * width;
+            const cy = (py / 100) * height;
+            const dist = Math.hypot(coords.x - cx, coords.y - cy);
+            if (dist < 10) {
+              foundHoverVertex = { objId: obj.id, pointIndex: idx };
+              break;
+            }
+          }
+          if (foundHoverVertex) break;
+        }
+      }
+      setHoveredVertex(foundHoverVertex);
+
+      // If dragging or hovering a vertex, don't trigger normal object background hover to avoid jumpiness
+      if (foundHoverVertex || draggedVertex) {
+        if (onHoverObject) onHoverObject(null);
+        return;
+      }
+
       handleCanvasMouseMove(e);
       return;
     }
@@ -1330,8 +1574,6 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
       handleCanvasMouseMove(e);
       return;
     }
-    const coords = getCanvasCoords(e);
-    if (!coords) return;
 
     const closest = findClosestTile(coords.x, coords.y);
     setHoveredTileId(closest ? closest.id : null);
@@ -1353,6 +1595,7 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   const handleMouseUp = () => {
     setIsMouseDown(false);
     setDraggedTileId(null);
+    setDraggedVertex(null);
   };
 
   return (
@@ -1387,7 +1630,11 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
           handleMouseUp();
         }}
         className={`w-full max-w-[500px] h-[500px] block transition-all duration-300 mx-auto select-none ${
-          viewMode === "vector" && template ? "cursor-crosshair" : "cursor-grab"
+          viewMode === "vector" && template 
+            ? "cursor-crosshair" 
+            : viewMode === "objects"
+            ? (segmentationTool === "pen" ? "cursor-cell" : (hoveredVertex ? "cursor-move" : "cursor-default"))
+            : "cursor-grab"
         }`}
       />
     </div>
