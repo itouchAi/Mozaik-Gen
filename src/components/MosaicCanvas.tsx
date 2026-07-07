@@ -1955,7 +1955,7 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="relative group overflow-hidden border border-slate-700/60 rounded-xl bg-slate-900 shadow-2xl">
+    <div ref={containerRef} className="w-full h-full max-w-full max-h-full flex items-center justify-center relative group overflow-hidden border border-slate-700/60 rounded-xl bg-slate-900 shadow-2xl">
       {/* Interactive indicator overlay */}
       {viewMode === "vector" && template && (
         <div className="absolute top-3 left-3 bg-slate-950/80 backdrop-blur-md text-xs font-medium text-amber-400 px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 z-10 pointer-events-none border border-amber-500/30">
@@ -2038,10 +2038,9 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         width={baseWidth}
         height={baseHeight}
         style={{
-          aspectRatio: `${baseWidth} / ${baseHeight}`,
-          maxHeight: `${baseHeight}px`
+          aspectRatio: `${baseWidth} / ${baseHeight}`
         }}
-        className={`w-full max-w-full block mx-auto select-none ${
+        className={`w-full h-full max-w-full max-h-full object-contain block mx-auto select-none ${
           viewMode === "vector" && template 
             ? "cursor-crosshair" 
             : viewMode === "objects"

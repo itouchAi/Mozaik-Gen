@@ -184,6 +184,54 @@ export default function App() {
   // Active control panel sidebar tab
   const [activeTab, setActiveTab] = useState<"design" | "settings" | "stats">("design");
 
+  // Fullscreen API Helper Methods
+  const enterFullscreen = async () => {
+    const root = document.getElementById("root");
+    if (root) {
+      try {
+        if (root.requestFullscreen) {
+          await root.requestFullscreen();
+        } else if ((root as any).webkitRequestFullscreen) {
+          await (root as any).webkitRequestFullscreen();
+        }
+        setIsFullscreen(true);
+      } catch (err) {
+        console.error("Error entering true fullscreen:", err);
+        setIsFullscreen(true);
+      }
+    } else {
+      setIsFullscreen(true);
+    }
+  };
+
+  const exitFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.error("Error exiting true fullscreen:", err);
+    }
+    setIsFullscreen(false);
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isCurrentlyFull = !!document.fullscreenElement;
+      setIsFullscreen(isCurrentlyFull);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+    };
+  }, []);
+
   // Initialize region colors when template changes
   useEffect(() => {
     if (selectedTemplate) {
@@ -1624,7 +1672,7 @@ export default function App() {
             {/* Fullscreen Floating Trigger Button */}
             <button
               onClick={() => {
-                setIsFullscreen(true);
+                enterFullscreen();
                 setExpandedPanel("design");
               }}
               className="absolute top-4 right-4 bg-slate-950/80 hover:bg-indigo-600 hover:text-white backdrop-blur-md text-slate-300 hover:shadow-lg hover:shadow-indigo-500/20 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-700/60 z-20 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
@@ -1637,7 +1685,7 @@ export default function App() {
             </button>
 
             {/* The Mosaic Render Canvas Container */}
-            <div className="w-full max-w-full lg:max-w-[660px] aspect-square relative z-10 flex items-center justify-center">
+            <div className="w-full max-w-full lg:max-w-[800px] aspect-square relative z-10 flex items-center justify-center">
               <MosaicCanvas
                 template={selectedTemplate}
                 regionColors={regionColors}
@@ -2066,7 +2114,7 @@ export default function App() {
                 </button>
 
                 <button
-                  onClick={() => setIsFullscreen(false)}
+                  onClick={exitFullscreen}
                   className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/25 hover:bg-rose-600/35 border border-rose-500/30 text-rose-300 transition-all cursor-pointer"
                 >
                   Kapat ✕
@@ -2080,7 +2128,7 @@ export default function App() {
 
             {/* Main visual canvas container */}
             <div className="w-full max-w-full h-full max-h-[85vh] flex items-center justify-center p-4">
-              <div className="w-full max-w-full lg:max-w-[760px] xl:max-w-[820px] aspect-square relative z-10 flex items-center justify-center">
+              <div className="w-full h-full relative z-10 flex items-center justify-center">
                 <MosaicCanvas
                   template={selectedTemplate}
                   regionColors={regionColors}
@@ -2670,94 +2718,271 @@ export default function App() {
                   expandedPanel === "objects" ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
                 }`}>
                   <div className="overflow-hidden">
-                    <div className="p-4 border-t border-white/5 bg-[#0a0a12]/40 space-y-3">
-                      <div className="flex bg-black/40 p-1 rounded-lg border border-white/5">
+                    <div className="p-4 border-t border-white/5 bg-[#0a0a12]/40 space-y-4 text-left">
+                      <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-100 uppercase tracking-wider">🎯 Seçici Nesne Mozaikleme</h4>
+                          <p className="text-[10px] text-slate-400">Görseldeki nesneleri seçerek bağımsız mozaiklere dönüştürün.</p>
+                        </div>
+                        {segmentationTool === "auto" && (
+                          <button
+                            onClick={detectObjectsFromImage}
+                            disabled={isAnalyzingObjects}
+                            className="px-3 py-1.5 rounded-lg text-[10px] font-semibold bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-all flex items-center gap-1 active:scale-95 disabled:opacity-50"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            Yeniden Analiz Et
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Sub-tool Selector Tabs */}
+                      <div className="flex bg-black/40 p-1 rounded-xl border border-white/5">
                         <button
-                          onClick={() => setSegmentationTool("auto")}
-                          className={`flex-1 py-1.5 rounded text-[11px] font-bold text-center transition-all cursor-pointer ${
-                            segmentationTool === "auto" ? "bg-indigo-600/35 border border-indigo-500/20 text-indigo-300" : "text-slate-400"
+                          onClick={() => {
+                            setSegmentationTool("auto");
+                            setManualDrawWarning(null);
+                          }}
+                          className={`flex-1 py-2 rounded-lg text-xs font-bold text-center transition-all cursor-pointer ${
+                            segmentationTool === "auto"
+                              ? "bg-indigo-600/25 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_10px_rgba(99,102,241,0.1)]"
+                              : "text-slate-400 hover:text-slate-200"
                           }`}
                         >
-                          Otomatik
+                          🎯 Otomatik Nesne Seçimi
                         </button>
                         <button
-                          onClick={() => setSegmentationTool("pen")}
-                          className={`flex-1 py-1.5 rounded text-[11px] font-bold text-center transition-all cursor-pointer ${
-                            segmentationTool === "pen" ? "bg-indigo-600/35 border border-indigo-500/20 text-indigo-300" : "text-slate-400"
+                          onClick={() => {
+                            setSegmentationTool("pen");
+                            setManualDrawWarning(null);
+                          }}
+                          className={`flex-1 py-2 rounded-lg text-xs font-bold text-center transition-all cursor-pointer ${
+                            segmentationTool === "pen"
+                              ? "bg-indigo-600/25 border border-indigo-500/30 text-indigo-300 font-semibold shadow-[0_0_10px_rgba(99,102,241,0.1)]"
+                              : "text-slate-400 hover:text-slate-200"
                           }`}
                         >
-                          Manuel Çizim
+                          ✏️ Manuel Kalem Çizimi
                         </button>
                       </div>
 
-                      {segmentationTool === "auto" ? (
-                        <div className="grid grid-cols-1 gap-1.5 max-h-40 overflow-y-auto pt-1 pr-1">
-                          {detectedObjects.map((obj) => {
-                            const isSelected = selectedObjectIds.includes(obj.id);
-                            return (
-                              <div
-                                key={obj.id}
-                                onClick={() => {
-                                  setSelectedObjectIds((prev) =>
-                                    prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]
-                                  );
-                                }}
-                                className={`p-2 rounded-lg border text-left cursor-pointer transition-all flex items-center justify-between gap-2 ${
-                                  isSelected
-                                    ? "bg-indigo-950/40 border-indigo-500/40 text-indigo-300 font-semibold"
-                                    : "bg-[#0a0a12] border-white/5 text-slate-400 hover:bg-white/5"
-                                }`}
-                              >
-                                <span className="text-[11px] truncate">{obj.name}</span>
-                                <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
-                                  isSelected ? "border-indigo-500 bg-indigo-500 text-white" : "border-white/10"
-                                }`}>
-                                  {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                                </div>
-                              </div>
-                            );
-                          })}
+                      {/* Warning Banner for Unclosed Paths */}
+                      {manualDrawWarning && (
+                        <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-start justify-between gap-2 text-[11px] text-rose-400 leading-relaxed animate-pulse">
+                          <span>⚠️ {manualDrawWarning}</span>
+                          <button
+                            onClick={() => setManualDrawWarning(null)}
+                            className="text-rose-400 hover:text-rose-300 font-bold shrink-0 px-1"
+                          >
+                            ✕
+                          </button>
                         </div>
-                      ) : (
-                        <div className="space-y-2 pt-1 text-[10px]">
-                          <p className="text-slate-400">Görsel üzerinde tıklayarak noktalar belirleyin. Başlangıç noktasına tekrar tıklayıp birleştirin.</p>
+                      )}
+
+                      {/* Tab content 1: AUTO */}
+                      {segmentationTool === "auto" && (
+                        <div className="space-y-3">
+                          <div className="text-[11px] text-slate-300 bg-indigo-950/20 p-3 rounded-xl border border-indigo-500/10 space-y-1.5 leading-relaxed">
+                            <p className="font-bold text-indigo-400 flex items-center gap-1">
+                              ✨ Sınır Noktalarını Düzenleme
+                            </p>
+                            <ul className="list-disc pl-4 space-y-1 text-[10px] text-slate-400">
+                              <li><strong>Nokta Taşı:</strong> Sınırı genişletmek veya daraltmak için altın noktaları sürükleyin.</li>
+                              <li><strong>Yeni Nokta Ekle:</strong> Sınır çizgisi üzerinde boş bir yere tıklayarak yeni bir nokta oluşturun.</li>
+                              <li><strong>Nokta Sil:</strong> Noktayı kaldırmak için üzerine <strong>çift tıklayın (Double-Click)</strong>.</li>
+                            </ul>
+                          </div>
+
+                          {detectedObjects.length > 0 ? (
+                            <div className="grid grid-cols-1 gap-2 max-h-56 overflow-y-auto pr-1">
+                              {detectedObjects.map((obj) => {
+                                const isSelected = selectedObjectIds.includes(obj.id);
+                                const isHovered = obj.id === hoveredObjectId;
+                                return (
+                                  <div
+                                    key={obj.id}
+                                    onMouseEnter={() => setHoveredObjectId(obj.id)}
+                                    onMouseLeave={() => setHoveredObjectId(null)}
+                                    onClick={() => {
+                                      setSelectedObjectIds((prev) =>
+                                        prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]
+                                      );
+                                    }}
+                                    className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex items-center justify-between gap-3 ${
+                                      isSelected
+                                        ? "bg-indigo-950/40 border-indigo-500/50 text-indigo-300 shadow-[0_0_12px_rgba(99,102,241,0.15)]"
+                                        : isHovered
+                                        ? "bg-white/5 border-white/20 text-slate-200"
+                                        : "bg-black/20 border-white/5 text-slate-400 hover:bg-white/5"
+                                    }`}
+                                  >
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-xs font-semibold truncate">{obj.name}</p>
+                                      <p className="text-[9px] text-slate-500 font-mono">Bölge: %{Math.round((obj.box[2] - obj.box[0]) * (obj.box[3] - obj.box[1]))}</p>
+                                    </div>
+                                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                      isSelected ? "border-indigo-500 bg-indigo-500 text-white" : "border-white/10 bg-black/40"
+                                    }`}>
+                                      {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-center py-6 bg-black/20 rounded-xl border border-white/5">
+                              <p className="text-xs text-slate-400">Görsel nesneleri yükleniyor, lütfen bekleyin...</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Tab content 2: PEN (Manual drawing) */}
+                      {segmentationTool === "pen" && (
+                        <div className="space-y-4">
+                          <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5 space-y-1.5 text-[11px] text-slate-300 leading-relaxed">
+                            <p className="font-bold text-slate-200 flex items-center gap-1.5">
+                              ✍️ Manuel Kalem Nasıl Çalışır?
+                            </p>
+                            <ul className="list-decimal pl-4 space-y-1 text-slate-400 text-[10px]">
+                              <li>Görsel üzerinde sırayla tıklayarak sınır noktaları oluşturun.</li>
+                              <li>Sınırı kapatmak için <strong>yeşil parlayan başlangıç noktasına</strong> tekrar tıklayın.</li>
+                              <li>Yolları kapatıp ardından <strong>"Sınırı Nesne Olarak Kaydet"</strong> butonuna basarak mozaikleştirebilirsiniz.</li>
+                            </ul>
+                          </div>
+
+                          <div className="flex items-center justify-between bg-black/30 p-3 rounded-xl border border-white/5">
+                            <div className="text-[11px]">
+                              <span className="text-slate-400 block">Dizilen Nokta Sayısı:</span>
+                              <strong className="text-slate-200 font-mono text-xs">{manualDrawPoints.length} Adet</strong>
+                            </div>
+                            <div className="text-[11px]">
+                              <span className="text-slate-400 block">Sınır Durumu:</span>
+                              <strong className={`font-mono text-xs ${isDrawingClosed ? "text-emerald-400 animate-pulse" : "text-amber-400"}`}>
+                                {isDrawingClosed ? "🟢 KAPALI / TAMAMLANDI" : "🟡 AÇIK / BİRLEŞTİRİLMEDİ"}
+                              </strong>
+                            </div>
+                          </div>
+
                           <div className="flex gap-2">
                             <button
                               onClick={() => {
                                 setManualDrawPoints([]);
                                 setIsDrawingClosed(false);
+                                setManualDrawWarning(null);
                               }}
-                              className="flex-1 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded text-[10px] border border-white/5 transition-all cursor-pointer"
+                              className="flex-1 py-2 rounded-xl text-xs font-semibold bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-all text-center active:scale-95 cursor-pointer"
                             >
-                              Temizle
+                              🗑️ Çizimi Temizle
                             </button>
                             <button
                               onClick={() => {
                                 if (!isDrawingClosed || manualDrawPoints.length < 3) {
-                                  alert("Lütfen önce açık uçları yeşil noktaya tıklayarak kapatın.");
+                                  setManualDrawWarning("Sınır kapatılmamış! Lütfen çizimin başlangıç ve bitiş uçlarını (parıldayan yeşil halkayı) birleştirerek kapalı bir bölge oluşturun.");
                                   return;
                                 }
+
                                 const newId = `manual_${Date.now()}`;
                                 const xs = manualDrawPoints.map((p) => p[0]);
                                 const ys = manualDrawPoints.map((p) => p[1]);
+                                const xmin = Math.min(...xs);
+                                const xmax = Math.max(...xs);
+                                const ymin = Math.min(...ys);
+                                const ymax = Math.max(...ys);
+
                                 const newObj = {
                                   id: newId,
                                   name: `Manuel Çizim ${detectedObjects.filter((o) => o.id.startsWith("manual_")).length + 1}`,
-                                  box: [Math.min(...ys), Math.min(...xs), Math.max(...ys), Math.max(...xs)],
+                                  box: [ymin, xmin, ymax, xmax],
                                   polygon: [...manualDrawPoints],
                                 };
+
                                 setDetectedObjects((prev) => [...prev, newObj]);
                                 setSelectedObjectIds((prev) => [...prev, newId]);
                                 setManualDrawPoints([]);
                                 setIsDrawingClosed(false);
+                                setManualDrawWarning(null);
                               }}
-                              className="flex-1 py-1.5 bg-indigo-600 text-white rounded text-[10px] hover:bg-indigo-500 transition-all cursor-pointer"
+                              className="flex-1 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all text-center active:scale-95 shadow-[0_0_15px_rgba(99,102,241,0.25)] cursor-pointer"
                             >
-                              Kaydet
+                              💾 Sınırı Nesne Yap
                             </button>
                           </div>
                         </div>
                       )}
+
+                      {/* List of Custom-Drawn Objects */}
+                      {detectedObjects.some((o) => o.id.startsWith("manual_")) && (
+                        <div className="border-t border-white/5 pt-4 mt-2 space-y-2">
+                          <h5 className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                            ✏️ Çizdiğiniz Manuel Nesneler ({detectedObjects.filter((o) => o.id.startsWith("manual_")).length})
+                          </h5>
+                          <div className="grid grid-cols-1 gap-2 max-h-[160px] overflow-y-auto pr-1">
+                            {detectedObjects
+                              .filter((o) => o.id.startsWith("manual_"))
+                              .map((obj) => {
+                                const isSelected = selectedObjectIds.includes(obj.id);
+                                return (
+                                  <div
+                                    key={obj.id}
+                                    className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 transition-all ${
+                                      isSelected
+                                        ? "bg-indigo-950/30 border-indigo-500/45 text-indigo-300"
+                                        : "bg-black/20 border-white/5 text-slate-400 hover:bg-white/5"
+                                    }`}
+                                  >
+                                    <div
+                                      onClick={() => {
+                                        setSelectedObjectIds((prev) =>
+                                          prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]
+                                        );
+                                      }}
+                                      className="min-w-0 flex-1 cursor-pointer"
+                                    >
+                                      <p className="text-xs font-semibold truncate">{obj.name}</p>
+                                      <p className="text-[9px] text-slate-500 font-mono">
+                                        {obj.polygon?.length || 0} Nokta
+                                      </p>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setDetectedObjects((prev) => prev.filter((o) => o.id !== obj.id));
+                                          setSelectedObjectIds((prev) => prev.filter((id) => id !== obj.id));
+                                        }}
+                                        title="Çizimi Sil"
+                                        className="w-6 h-6 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/10 transition-all hover:scale-105 active:scale-95 shrink-0 cursor-pointer"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <div
+                                        onClick={() => {
+                                          setSelectedObjectIds((prev) =>
+                                            prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]
+                                          );
+                                        }}
+                                        className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 cursor-pointer ${
+                                          isSelected ? "border-indigo-500 bg-indigo-500 text-white" : "border-white/10 bg-black/40"
+                                        }`}
+                                      >
+                                        {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-xl flex gap-2 text-[10px] text-amber-400/80 leading-relaxed">
+                        <Info className="w-4 h-4 text-amber-500 shrink-0" />
+                        <p>
+                          💡 Görseldeki nesnelerin üzerine tıklayarak seçebilirsiniz. Seçtiğiniz her nesne anında mozaikleşecektir. 
+                          Mozaik boyutunu ve tasarım ayarlarını değiştirmek için sol paneldeki <strong>Mozaik Ayarları</strong> sekmesini kullanabilirsiniz.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2767,7 +2992,7 @@ export default function App() {
 
             <div className="p-4 border-t border-white/5 bg-black/20 text-center shrink-0">
               <button
-                onClick={() => setIsFullscreen(false)}
+                onClick={exitFullscreen}
                 className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-[0_0_15px_rgba(99,102,241,0.2)] cursor-pointer"
               >
                 Tam Ekrandan Çık
