@@ -1051,7 +1051,7 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
           const num = getColorNumber(tile.color);
           const rgb = getRgb(displayColor);
           const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
-          ctx.fillStyle = luminance > 0.55 ? "#000000" : "#ffffff";
+          ctx.fillStyle = "#000000";
           ctx.font = `bold ${Math.max(6, options.tileSize * 0.45)}px monospace`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
@@ -1404,7 +1404,7 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
           const num = getColorNumber(tile.color);
           const rgb = getRgb(displayColor);
           const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
-          ctx.fillStyle = luminance > 0.55 ? "#000000" : "#ffffff";
+          ctx.fillStyle = isGuideMode ? (luminance > 0.55 ? "#000000" : "#ffffff") : "#000000";
           ctx.font = `bold ${Math.max(6, options.tileSize * 0.45)}px monospace`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
@@ -2041,7 +2041,7 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
           aspectRatio: `${baseWidth} / ${baseHeight}`,
           maxHeight: `${baseHeight}px`
         }}
-        className={`w-full max-w-[500px] block mx-auto select-none ${
+        className={`w-full max-w-full block mx-auto select-none ${
           viewMode === "vector" && template 
             ? "cursor-crosshair" 
             : viewMode === "objects"

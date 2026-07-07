@@ -78,6 +78,10 @@ export default function App() {
     groutThreshold: 80,
   });
 
+  // Fullscreen & right accordion sidebar states
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [expandedPanel, setExpandedPanel] = useState<string>("design");
+
   // Color selection active palette state
   const [activeColor, setActiveColor] = useState<string>("#ffd700");
 
@@ -1617,8 +1621,23 @@ export default function App() {
             <div className="absolute inset-0 opacity-5 pointer-events-none z-0" 
                  style={{ backgroundImage: "radial-gradient(#4f46e5 0.5px, transparent 0.5px)", backgroundSize: "24px 24px" }} />
 
+            {/* Fullscreen Floating Trigger Button */}
+            <button
+              onClick={() => {
+                setIsFullscreen(true);
+                setExpandedPanel("design");
+              }}
+              className="absolute top-4 right-4 bg-slate-950/80 hover:bg-indigo-600 hover:text-white backdrop-blur-md text-slate-300 hover:shadow-lg hover:shadow-indigo-500/20 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-700/60 z-20 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+              title="Tam Ekran Modu"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75h4.5m0-4.5V3.75m12 0h-4.5m4.5 0V8.25M3.75 20.25h4.5m-4.5 0v-4.5m12 4.5h-4.5m4.5 0v-4.5" />
+              </svg>
+              Tam Ekran
+            </button>
+
             {/* The Mosaic Render Canvas Container */}
-            <div className="w-full max-w-[500px] aspect-square relative z-10">
+            <div className="w-full max-w-full lg:max-w-[660px] aspect-square relative z-10 flex items-center justify-center">
               <MosaicCanvas
                 template={selectedTemplate}
                 regionColors={regionColors}
@@ -2010,6 +2029,753 @@ export default function App() {
           <span>V 0.9.6 PREVIEW</span>
         </div>
       </footer>
+
+      {/* FULLSCREEN MODE MODAL */}
+      {isFullscreen && (
+        <div className="fixed inset-0 z-[100] bg-[#050508] flex flex-col md:flex-row h-screen w-screen overflow-hidden text-slate-300 font-sans">
+          
+          {/* Left Side: Interactive Workspace & Canvas Area */}
+          <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 bg-[#030307] relative h-full">
+            
+            {/* Top row actions in fullscreen */}
+            <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-20">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold font-mono text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-full border border-indigo-500/20">
+                  TAM EKRAN MODU
+                </span>
+                <span className="text-xs text-slate-400 hidden sm:inline">
+                  {selectedTemplate ? `Şablon: ${selectedTemplate.name}` : `Özel Görsel: ${customImageName}`}
+                </span>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={startBuildAnimation}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)] border border-indigo-500/30 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 fill-white" />
+                  İnşa Animasyonu
+                </button>
+                
+                <button
+                  onClick={downloadMosaic}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Görseli Kaydet (PNG)
+                </button>
+
+                <button
+                  onClick={() => setIsFullscreen(false)}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/25 hover:bg-rose-600/35 border border-rose-500/30 text-rose-300 transition-all cursor-pointer"
+                >
+                  Kapat ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Background Grid Pattern inside Canvas Container */}
+            <div className="absolute inset-0 opacity-5 pointer-events-none z-0" 
+                 style={{ backgroundImage: "radial-gradient(#4f46e5 0.5px, transparent 0.5px)", backgroundSize: "24px 24px" }} />
+
+            {/* Main visual canvas container */}
+            <div className="w-full max-w-full h-full max-h-[85vh] flex items-center justify-center p-4">
+              <div className="w-full max-w-full lg:max-w-[760px] xl:max-w-[820px] aspect-square relative z-10 flex items-center justify-center">
+                <MosaicCanvas
+                  template={selectedTemplate}
+                  regionColors={regionColors}
+                  selectedRegionId={selectedRegionId}
+                  onRegionSelect={(id) => {
+                    setSelectedRegionId(id);
+                    if (regionColors[id]) {
+                      setActiveColor(regionColors[id]);
+                    }
+                    setExpandedPanel("design");
+                  }}
+                  options={options}
+                  customImage={customImage}
+                  viewMode={viewMode}
+                  buildProgress={buildProgress}
+                  onTileStatsChange={(stats) => setTileStats(stats)}
+                  customImageColors={customImageColors}
+                  customColorReplacements={customColorReplacements}
+                  showNumbers={showNumbers}
+                  activeEditTool={activeEditTool}
+                  activeColor={activeColor}
+                  detectedObjects={detectedObjects}
+                  selectedObjectIds={selectedObjectIds}
+                  hoveredObjectId={hoveredObjectId}
+                  onHoverObject={(id) => setHoveredObjectId(id)}
+                  onSelectObject={(id) => {
+                    setSelectedObjectIds((prev) =>
+                      prev.includes(id) ? prev.filter((oid) => oid !== id) : [...prev, id]
+                    );
+                  }}
+                  segmentationTool={segmentationTool}
+                  manualDrawPoints={manualDrawPoints}
+                  onUpdateManualDrawPoints={(pts) => setManualDrawPoints(pts)}
+                  isDrawingClosed={isDrawingClosed}
+                  onSetDrawingClosed={(closed) => setIsDrawingClosed(closed)}
+                  onUpdateObjectPolygon={handleUpdateObjectPolygon}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Right Side: Accordion Menu Sidebar */}
+          <div className="w-full md:w-[420px] bg-[#0a0a12] border-l border-white/5 flex flex-col h-full z-10 relative">
+            <div className="p-4 border-b border-white/5 flex items-center justify-between bg-black/20 shrink-0">
+              <div className="flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-indigo-400" />
+                <h2 className="text-sm font-bold text-white uppercase tracking-wider">Mozaik Kontrol Paneli</h2>
+              </div>
+              <span className="text-[10px] bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-0.5 rounded-full text-indigo-300 font-mono font-semibold">
+                {totalTiles} Taş
+              </span>
+            </div>
+
+            {/* Accordion List Container */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              
+              {/* SECTION 1: TASARIM & RENK */}
+              <div className="border border-white/5 rounded-xl overflow-hidden bg-black/15">
+                <button
+                  onClick={() => setExpandedPanel(expandedPanel === "design" ? "" : "design")}
+                  className={`w-full p-3.5 flex items-center justify-between text-left transition-all cursor-pointer ${
+                    expandedPanel === "design" ? "bg-indigo-950/35 text-indigo-300" : "hover:bg-white/5 text-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Palette className="w-4 h-4 text-indigo-400" />
+                    <span className="text-xs font-bold uppercase tracking-wider">🎨 Tasarım & Renk</span>
+                  </div>
+                  <span className="text-xs text-slate-500">{expandedPanel === "design" ? "▼" : "▶"}</span>
+                </button>
+                
+                <div className={`grid transition-all duration-300 ease-in-out ${
+                  expandedPanel === "design" ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                }`}>
+                  <div className="overflow-hidden">
+                    <div className="p-4 border-t border-white/5 bg-[#0a0a12]/40 space-y-4 max-h-[50vh] overflow-y-auto">
+                      
+                      {/* 1. Template picker & File uploader */}
+                      <div className="space-y-3">
+                        <label className="text-xs text-slate-400 font-medium">Şablon Seçimi & Görsel Yükle</label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {templates.map((temp) => (
+                            <button
+                              key={temp.id}
+                              onClick={() => {
+                                removeCustomImage();
+                                setSelectedTemplate(temp);
+                              }}
+                              className={`p-2 rounded-lg border text-left transition-all cursor-pointer ${
+                                selectedTemplate?.id === temp.id && !customImage
+                                  ? "bg-indigo-950/40 border-indigo-500/50 text-indigo-300 font-semibold"
+                                  : "bg-[#0a0a12] border-white/5 text-slate-400 hover:bg-white/5"
+                              }`}
+                            >
+                              <div className="font-semibold text-[10px] text-slate-100 truncate">{temp.name}</div>
+                              <div className="text-[8px] text-slate-400 truncate">{temp.regions.length} Bölge</div>
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* File selector status */}
+                        <div 
+                          onClick={() => fileInputRef.current?.click()}
+                          className="border border-dashed border-white/10 rounded-lg p-3 text-center bg-black/20 hover:border-white/20 transition-all cursor-pointer"
+                        >
+                          {customImage ? (
+                            <div className="flex items-center justify-between gap-2 text-left">
+                              <span className="text-[10px] text-indigo-400 font-semibold truncate">Yüklü: {customImageName}</span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeCustomImage();
+                                }}
+                                className="text-xs text-rose-400 hover:text-rose-300 font-semibold cursor-pointer"
+                              >
+                                Sil
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 font-medium">📂 Özel Görsel Yükle (PNG, JPG)</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Palettes Preset */}
+                      <div className="space-y-2 border-t border-white/5 pt-3">
+                        <label className="text-xs text-slate-400 font-medium">Hızlı Renk Paleti Uygula</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {PRESET_PALETTES.map((pal) => (
+                            <button
+                              key={pal.name}
+                              onClick={() => applyPresetPalette(pal.colors)}
+                              className="p-1.5 rounded bg-[#0a0a12]/80 hover:bg-white/5 border border-white/5 flex items-center justify-between text-left cursor-pointer"
+                            >
+                              <span className="text-[10px] font-semibold text-slate-200 truncate">{pal.name}</span>
+                              <div className="flex gap-0.5 shrink-0 ml-1">
+                                {pal.colors.slice(0, 3).map((col) => (
+                                  <span key={col} className="w-2 h-2 rounded-full border border-black/20" style={{ backgroundColor: col }} />
+                                ))}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 2. Painter or Custom colors */}
+                      {selectedTemplate ? (
+                        <div className="space-y-3 border-t border-white/5 pt-3">
+                          <label className="text-xs text-slate-400 font-medium">Bölge Boyama Aracı</label>
+                          <div className="space-y-2 max-h-40 overflow-y-auto bg-black/30 p-2 rounded-lg border border-white/5">
+                            {selectedTemplate.regions.map((region) => {
+                              const currentColor = regionColors[region.id] || region.defaultColor;
+                              const isSelected = selectedRegionId === region.id;
+                              return (
+                                <button
+                                  key={region.id}
+                                  onClick={() => {
+                                    setSelectedRegionId(region.id);
+                                    setActiveColor(currentColor);
+                                  }}
+                                  className={`w-full flex items-center justify-between p-1.5 rounded text-left ${
+                                    isSelected ? "bg-indigo-950/40 text-indigo-300" : "hover:bg-white/5 text-slate-400"
+                                  }`}
+                                >
+                                  <span className="text-[11px] truncate">{region.name}</span>
+                                  <span className="w-3.5 h-3.5 rounded-full border border-white/10" style={{ backgroundColor: currentColor }} />
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          <div className="flex items-center gap-2 mt-2 bg-black/40 p-2 rounded-lg border border-white/5">
+                            <span className="text-[10px] text-slate-400 shrink-0">Bölge Rengi:</span>
+                            <input
+                              type="color"
+                              value={activeColor}
+                              onChange={(e) => handleRegionColorApply(e.target.value)}
+                              className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 shrink-0"
+                            />
+                            <div className="flex flex-wrap gap-1">
+                              {["#ef4444", "#f97316", "#facc15", "#22c55e", "#00d2ff", "#7000ff", "#ff007f", "#ffffff", "#000000"].map((c) => (
+                                <button
+                                  key={c}
+                                  onClick={() => handleRegionColorApply(c)}
+                                  className="w-3.5 h-3.5 rounded-full border border-white/10 hover:scale-110 transition-all cursor-pointer"
+                                  style={{ backgroundColor: c }}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-3 border-t border-white/5 pt-3">
+                          <div className="space-y-1.5">
+                            <div className="flex justify-between text-xs text-slate-400">
+                              <span>Renk Adedi (Özel Görsel)</span>
+                              <span className="font-mono text-indigo-400 font-bold">{colorCount} Renk</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="4"
+                              max="12"
+                              value={colorCount}
+                              onChange={(e) => setColorCount(parseInt(e.target.value))}
+                              className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                            />
+                          </div>
+
+                          <div className="space-y-2 bg-black/30 p-2 rounded-lg border border-white/5">
+                            <span className="text-[10px] text-slate-400 block font-semibold uppercase">Baskın Renk Değişim Tablosu</span>
+                            <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto">
+                              {customImageColors.map((origCol) => {
+                                const replCol = customColorReplacements[origCol] || origCol;
+                                return (
+                                  <div key={origCol} className="flex items-center gap-1.5 bg-[#0a0a12]/80 p-1.5 rounded border border-white/5">
+                                    <span className="w-4 h-4 rounded border border-white/10 shrink-0" style={{ backgroundColor: origCol }} title="Orijinal" />
+                                    <span className="text-slate-500 text-[10px]">➜</span>
+                                    <input
+                                      type="color"
+                                      value={replCol}
+                                      onChange={(e) => {
+                                        setCustomColorReplacements((prev) => ({
+                                          ...prev,
+                                          [origCol]: e.target.value,
+                                        }));
+                                      }}
+                                      className="w-5 h-5 rounded cursor-pointer bg-transparent border-0"
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 2: MOZAİK AYARLARI */}
+              <div className="border border-white/5 rounded-xl overflow-hidden bg-black/15">
+                <button
+                  onClick={() => setExpandedPanel(expandedPanel === "settings" ? "" : "settings")}
+                  className={`w-full p-3.5 flex items-center justify-between text-left transition-all cursor-pointer ${
+                    expandedPanel === "settings" ? "bg-indigo-950/35 text-indigo-300" : "hover:bg-white/5 text-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Sliders className="w-4 h-4 text-purple-400" />
+                    <span className="text-xs font-bold uppercase tracking-wider">⚙️ Mozaik Ayarları</span>
+                  </div>
+                  <span className="text-xs text-slate-500">{expandedPanel === "settings" ? "▼" : "▶"}</span>
+                </button>
+                
+                <div className={`grid transition-all duration-300 ease-in-out ${
+                  expandedPanel === "settings" ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                }`}>
+                  <div className="overflow-hidden">
+                    <div className="p-4 border-t border-white/5 bg-[#0a0a12]/40 space-y-4 max-h-[50vh] overflow-y-auto">
+                      
+                      {/* Shape Select */}
+                      <div className="space-y-2">
+                        <label className="text-xs text-slate-400 font-medium">Mozaik Parça Şekli</label>
+                        <div className="grid grid-cols-4 gap-1.5">
+                          {(["square", "rounded-square", "circle", "triangle"] as TileShape[]).map((shape) => (
+                            <button
+                              key={shape}
+                              onClick={() => setOptions((prev) => ({ ...prev, shape }))}
+                              className={`py-2 px-1 rounded-lg border text-center transition-all flex flex-col items-center gap-1 cursor-pointer ${
+                                options.shape === shape
+                                  ? "bg-indigo-950/40 border-indigo-500/50 text-indigo-300 font-semibold"
+                                  : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                              }`}
+                            >
+                              <span className={`w-3 h-3 border ${
+                                shape === "circle" ? "rounded-full" : shape === "rounded-square" ? "rounded-xs" : ""
+                              } ${options.shape === shape ? "border-indigo-400 bg-indigo-400/20" : "border-slate-500 bg-transparent"}`}
+                              style={{ clipPath: shape === "triangle" ? "polygon(50% 0%, 0% 100%, 100% 100%)" : "none" }}
+                              />
+                              <span className="text-[9px]">
+                                {shape === "square" ? "Kare" : shape === "rounded-square" ? "Yuvarlak" : shape === "circle" ? "Daire" : "Üçgen"}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Tile size slider */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                          <span>Mozaik Parça Boyutu (Tile Size)</span>
+                          <span className="font-mono text-indigo-400 font-bold">{options.tileSize}px</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="8"
+                          max="32"
+                          step="2"
+                          value={options.tileSize}
+                          onChange={(e) => setOptions((prev) => ({ ...prev, tileSize: parseInt(e.target.value) }))}
+                          className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Gap size slider */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                          <span>Derz / Parça Arası Boşluk (Gap)</span>
+                          <span className="font-mono text-indigo-400 font-bold">{options.gap}px</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="6"
+                          step="0.5"
+                          value={options.gap}
+                          onChange={(e) => setOptions((prev) => ({ ...prev, gap: parseFloat(e.target.value) }))}
+                          className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Jitter slider */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                          <span>Düzensizlik Oranı (Jitter)</span>
+                          <span className="font-mono text-indigo-400 font-bold">%{options.jitter}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="90"
+                          step="5"
+                          value={options.jitter}
+                          onChange={(e) => setOptions((prev) => ({ ...prev, jitter: parseInt(e.target.value) }))}
+                          className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Outlines toggles */}
+                      <div className="space-y-2 border-t border-white/5 pt-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-slate-400">Sınır Çizgilerini Göster</span>
+                          <input
+                            type="checkbox"
+                            checked={options.showOutlines}
+                            onChange={(e) => setOptions((prev) => ({ ...prev, showOutlines: e.target.checked }))}
+                            className="accent-indigo-500 cursor-pointer"
+                          />
+                        </div>
+
+                        {options.showOutlines && (
+                          <div className="grid grid-cols-2 gap-2 p-2 rounded bg-black/40 border border-white/5">
+                            <div className="space-y-0.5">
+                              <span className="text-[9px] text-slate-500">Çizgi Rengi</span>
+                              <select
+                                value={options.outlineColor}
+                                onChange={(e) => setOptions((prev) => ({ ...prev, outlineColor: e.target.value }))}
+                                className="w-full p-1 rounded bg-[#0a0a12] border border-white/5 text-[10px]"
+                              >
+                                <option value="#ffffff">Beyaz</option>
+                                <option value="#000000">Siyah</option>
+                                <option value="#475569">Gri</option>
+                                <option value="#ffd700">Altın Sarısı</option>
+                              </select>
+                            </div>
+
+                            <div className="space-y-0.5">
+                              <span className="text-[9px] text-slate-500">Çizgi Kalınlığı</span>
+                              <select
+                                value={options.outlineWidth}
+                                onChange={(e) => setOptions((prev) => ({ ...prev, outlineWidth: parseFloat(e.target.value) }))}
+                                className="w-full p-1 rounded bg-[#0a0a12] border border-white/5 text-[10px]"
+                              >
+                                <option value="1">İnce</option>
+                                <option value="1.5">Orta</option>
+                                <option value="2.5">Kalın</option>
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* BUTTON 1: ÖNİZLEME / BOYAMA */}
+              <div className="border border-white/5 rounded-xl overflow-hidden bg-black/15">
+                <button
+                  onClick={() => {
+                    setExpandedPanel("vector");
+                    setViewMode("vector");
+                    if (!selectedTemplate && customImage) {
+                      setIsCustomConfirmed(false);
+                    }
+                  }}
+                  className={`w-full p-3.5 flex items-center justify-between text-left transition-all cursor-pointer ${
+                    expandedPanel === "vector" ? "bg-indigo-950/35 text-indigo-300" : "hover:bg-white/5 text-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 w-5 h-5 rounded flex items-center justify-center shrink-0">1</span>
+                    <span className="text-xs font-bold uppercase tracking-wider">
+                      {selectedTemplate ? "🎨 Boyama Sahnesi" : "📸 Orijinal Önizleme"}
+                    </span>
+                  </div>
+                  <span className="text-xs text-slate-500">{expandedPanel === "vector" ? "▼" : "▶"}</span>
+                </button>
+                
+                <div className={`grid transition-all duration-300 ease-in-out ${
+                  expandedPanel === "vector" ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                }`}>
+                  <div className="overflow-hidden">
+                    <div className="p-4 border-t border-white/5 bg-[#0a0a12]/40 space-y-3">
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        {selectedTemplate 
+                          ? "Sayılarla Boyama Modu aktiftir. Şablonun istediğiniz bölgesine tıklayıp 'Tasarım & Renk' panelinden rengini değiştirebilirsiniz."
+                          : "Özel görseliniz şu an orijinal renkleriyle önizleniyor. Mozaik görünümüne dönüştürmek için aşağıdaki butona tıklayın."
+                        }
+                      </p>
+                      {!selectedTemplate && !isCustomConfirmed && (
+                        <button
+                          onClick={() => {
+                            setIsCustomConfirmed(true);
+                            setViewMode("mosaic");
+                            setExpandedPanel("mosaic");
+                            startBuildAnimation();
+                          }}
+                          className="w-full py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg text-xs font-bold hover:from-indigo-500 cursor-pointer"
+                        >
+                          Görseli Mozaikleştir 🧩
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* BUTTON 2: MOZAİK GÖRÜNÜMÜ */}
+              <div className="border border-white/5 rounded-xl overflow-hidden bg-black/15">
+                <button
+                  onClick={() => {
+                    setExpandedPanel("mosaic");
+                    setViewMode("mosaic");
+                    setIsCustomConfirmed(true);
+                  }}
+                  className={`w-full p-3.5 flex items-center justify-between text-left transition-all cursor-pointer ${
+                    expandedPanel === "mosaic" ? "bg-indigo-950/35 text-indigo-300" : "hover:bg-white/5 text-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 w-5 h-5 rounded flex items-center justify-center shrink-0">2</span>
+                    <span className="text-xs font-bold uppercase tracking-wider">🧩 Mozaik Görünümü</span>
+                  </div>
+                  <span className="text-xs text-slate-500">{expandedPanel === "mosaic" ? "▼" : "▶"}</span>
+                </button>
+                
+                <div className={`grid transition-all duration-300 ease-in-out ${
+                  expandedPanel === "mosaic" ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                }`}>
+                  <div className="overflow-hidden">
+                    <div className="p-4 border-t border-white/5 bg-[#0a0a12]/40 space-y-4">
+                      <div className="space-y-2">
+                        <span className="text-[10px] text-indigo-400 uppercase font-bold tracking-wider">🛠️ MANUEL MOZAİK ATÖLYESİ</span>
+                        <p className="text-[10px] text-slate-400 leading-relaxed">
+                          Taşların yerini değiştirebilir, renkleri takas edebilir, silebilir veya yeni parçalar ekleyebilirsiniz:
+                        </p>
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <button
+                            onClick={() => setActiveEditTool("move")}
+                            className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
+                              activeEditTool === "move"
+                                ? "bg-indigo-950/50 border-indigo-500/50 text-indigo-300 font-semibold"
+                                : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            👋 Taşı / Sürükle
+                          </button>
+                          <button
+                            onClick={() => setActiveEditTool("swap")}
+                            className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
+                              activeEditTool === "swap"
+                                ? "bg-indigo-950/50 border-indigo-500/50 text-indigo-300 font-semibold"
+                                : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            🔄 Taşları Takas Et
+                          </button>
+                          <button
+                            onClick={() => setActiveEditTool("erase")}
+                            className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
+                              activeEditTool === "erase"
+                                ? "bg-indigo-950/50 border-indigo-500/50 text-indigo-300 font-semibold"
+                                : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            ❌ Parça Sil
+                          </button>
+                          <button
+                            onClick={() => setActiveEditTool("add")}
+                            className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
+                              activeEditTool === "add"
+                                ? "bg-indigo-950/50 border-indigo-500/50 text-indigo-300 font-semibold"
+                                : "bg-[#0a0a12]/60 border-white/5 text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            ➕ Yeni Taş Ekle
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* BUTTON 3: SAYI KILAVUZU */}
+              <div className="border border-white/5 rounded-xl overflow-hidden bg-black/15">
+                <button
+                  onClick={() => {
+                    setExpandedPanel("guide");
+                    setViewMode("guide");
+                    setIsCustomConfirmed(true);
+                    setShowNumbers(true);
+                  }}
+                  className={`w-full p-3.5 flex items-center justify-between text-left transition-all cursor-pointer ${
+                    expandedPanel === "guide" ? "bg-indigo-950/35 text-indigo-300" : "hover:bg-white/5 text-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 w-5 h-5 rounded flex items-center justify-center shrink-0">3</span>
+                    <span className="text-xs font-bold uppercase tracking-wider">📋 3. Sayı Kılavuzu</span>
+                  </div>
+                  <span className="text-xs text-slate-500">{expandedPanel === "guide" ? "▼" : "▶"}</span>
+                </button>
+                
+                <div className={`grid transition-all duration-300 ease-in-out ${
+                  expandedPanel === "guide" ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                }`}>
+                  <div className="overflow-hidden">
+                    <div className="p-4 border-t border-white/5 bg-[#0a0a12]/40 space-y-3">
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Fiziksel setinizi hazırlarken hangi taşı nereye koyacağınızı numaralarla gösteren teknik kılavuzdur.
+                      </p>
+                      <div className="flex items-center justify-between p-2 rounded bg-black/30 border border-white/5">
+                        <span className="text-[11px] text-slate-300">Sayı Numaralarını Göster</span>
+                        <input
+                          type="checkbox"
+                          checked={showNumbers}
+                          onChange={(e) => setShowNumbers(e.target.checked)}
+                          className="accent-indigo-500 cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* BUTTON 4: NESNE SEÇİMİ */}
+              <div className="border border-white/5 rounded-xl overflow-hidden bg-black/15">
+                <button
+                  onClick={() => {
+                    if (!customImage) {
+                      alert("Nesne seçimi yapabilmek için lütfen önce sol taraftan kendi görselinizi yükleyin!");
+                      return;
+                    }
+                    setExpandedPanel("objects");
+                    setViewMode("objects");
+                    setIsCustomConfirmed(true);
+                    if (detectedObjects.length === 0) {
+                      detectObjectsFromImage();
+                    }
+                  }}
+                  className={`w-full p-3.5 flex items-center justify-between text-left transition-all cursor-pointer ${
+                    expandedPanel === "objects" ? "bg-indigo-950/35 text-indigo-300" : "hover:bg-white/5 text-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 w-5 h-5 rounded flex items-center justify-center shrink-0">4</span>
+                    <span className="text-xs font-bold uppercase tracking-wider">🎯 4. Nesne Seçimi</span>
+                  </div>
+                  <span className="text-xs text-slate-500">{expandedPanel === "objects" ? "▼" : "▶"}</span>
+                </button>
+                
+                <div className={`grid transition-all duration-300 ease-in-out ${
+                  expandedPanel === "objects" ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                }`}>
+                  <div className="overflow-hidden">
+                    <div className="p-4 border-t border-white/5 bg-[#0a0a12]/40 space-y-3">
+                      <div className="flex bg-black/40 p-1 rounded-lg border border-white/5">
+                        <button
+                          onClick={() => setSegmentationTool("auto")}
+                          className={`flex-1 py-1.5 rounded text-[11px] font-bold text-center transition-all cursor-pointer ${
+                            segmentationTool === "auto" ? "bg-indigo-600/35 border border-indigo-500/20 text-indigo-300" : "text-slate-400"
+                          }`}
+                        >
+                          Otomatik
+                        </button>
+                        <button
+                          onClick={() => setSegmentationTool("pen")}
+                          className={`flex-1 py-1.5 rounded text-[11px] font-bold text-center transition-all cursor-pointer ${
+                            segmentationTool === "pen" ? "bg-indigo-600/35 border border-indigo-500/20 text-indigo-300" : "text-slate-400"
+                          }`}
+                        >
+                          Manuel Çizim
+                        </button>
+                      </div>
+
+                      {segmentationTool === "auto" ? (
+                        <div className="grid grid-cols-1 gap-1.5 max-h-40 overflow-y-auto pt-1 pr-1">
+                          {detectedObjects.map((obj) => {
+                            const isSelected = selectedObjectIds.includes(obj.id);
+                            return (
+                              <div
+                                key={obj.id}
+                                onClick={() => {
+                                  setSelectedObjectIds((prev) =>
+                                    prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]
+                                  );
+                                }}
+                                className={`p-2 rounded-lg border text-left cursor-pointer transition-all flex items-center justify-between gap-2 ${
+                                  isSelected
+                                    ? "bg-indigo-950/40 border-indigo-500/40 text-indigo-300 font-semibold"
+                                    : "bg-[#0a0a12] border-white/5 text-slate-400 hover:bg-white/5"
+                                }`}
+                              >
+                                <span className="text-[11px] truncate">{obj.name}</span>
+                                <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
+                                  isSelected ? "border-indigo-500 bg-indigo-500 text-white" : "border-white/10"
+                                }`}>
+                                  {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="space-y-2 pt-1 text-[10px]">
+                          <p className="text-slate-400">Görsel üzerinde tıklayarak noktalar belirleyin. Başlangıç noktasına tekrar tıklayıp birleştirin.</p>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                setManualDrawPoints([]);
+                                setIsDrawingClosed(false);
+                              }}
+                              className="flex-1 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded text-[10px] border border-white/5 transition-all cursor-pointer"
+                            >
+                              Temizle
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (!isDrawingClosed || manualDrawPoints.length < 3) {
+                                  alert("Lütfen önce açık uçları yeşil noktaya tıklayarak kapatın.");
+                                  return;
+                                }
+                                const newId = `manual_${Date.now()}`;
+                                const xs = manualDrawPoints.map((p) => p[0]);
+                                const ys = manualDrawPoints.map((p) => p[1]);
+                                const newObj = {
+                                  id: newId,
+                                  name: `Manuel Çizim ${detectedObjects.filter((o) => o.id.startsWith("manual_")).length + 1}`,
+                                  box: [Math.min(...ys), Math.min(...xs), Math.max(...ys), Math.max(...xs)],
+                                  polygon: [...manualDrawPoints],
+                                };
+                                setDetectedObjects((prev) => [...prev, newObj]);
+                                setSelectedObjectIds((prev) => [...prev, newId]);
+                                setManualDrawPoints([]);
+                                setIsDrawingClosed(false);
+                              }}
+                              className="flex-1 py-1.5 bg-indigo-600 text-white rounded text-[10px] hover:bg-indigo-500 transition-all cursor-pointer"
+                            >
+                              Kaydet
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <div className="p-4 border-t border-white/5 bg-black/20 text-center shrink-0">
+              <button
+                onClick={() => setIsFullscreen(false)}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-[0_0_15px_rgba(99,102,241,0.2)] cursor-pointer"
+              >
+                Tam Ekrandan Çık
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
