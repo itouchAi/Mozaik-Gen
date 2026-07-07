@@ -63,6 +63,25 @@ function isPointInPolygon(px: number, py: number, polygon: number[][]): boolean 
   return isInside;
 }
 
+// Distance from point (px, py) to line segment (x1, y1) - (x2, y2)
+function getDistanceToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): { distance: number; t: number } {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return { distance: Math.hypot(px - x1, py - y1), t: 0 };
+
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+
+  const projX = x1 + t * dx;
+  const projY = y1 + t * dy;
+
+  return {
+    distance: Math.hypot(px - projX, py - projY),
+    t
+  };
+}
+
 // Fallback to organic capsule/wave polygon if only bounding box is present
 function getOrganicObjectPolygon(obj: { box: number[]; polygon?: number[][] }): number[][] {
   if (obj.polygon && obj.polygon.length >= 3) {
@@ -337,6 +356,38 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   onUpdateObjectPolygon,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const polygonCacheRef = useRef<Record<string, number[][]>>({});
+
+  // Dynamic non-squashing base canvas dimensions based on template or original uploaded image aspect ratio
+  const { baseWidth, baseHeight } = useMemo(() => {
+    if (template) {
+      return { baseWidth: template.width, baseHeight: template.height };
+    }
+    if (customImage) {
+      const nw = customImage.naturalWidth || 500;
+      const nh = customImage.naturalHeight || 500;
+      if (nw >= nh) {
+        return {
+          baseWidth: 500,
+          baseHeight: Math.round(500 * (nh / nw))
+        };
+      } else {
+        return {
+          baseWidth: Math.round(500 * (nw / nh)),
+          baseHeight: 500
+        };
+      }
+    }
+    return { baseWidth: 500, baseHeight: 500 };
+  }, [template, customImage]);
+
+  // Zoom and Pan States
+  const [scale, setScale] = useState<number>(1.0);
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
   const [hoveredRegionId, setHoveredRegionId] = useState<string | null>(null);
   const [edgeData, setEdgeData] = useState<ImageData | null>(null);
   const [uploadedImgData, setUploadedImgData] = useState<ImageData | null>(null);
@@ -344,6 +395,7 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   // States for vertex dragging and manual pen drawing
   const [draggedVertex, setDraggedVertex] = useState<{ objId: string; pointIndex: number } | null>(null);
   const [hoveredVertex, setHoveredVertex] = useState<{ objId: string; pointIndex: number } | null>(null);
+  const [hoveredSegment, setHoveredSegment] = useState<{ objId: string; index1: number; index2: number; x: number; y: number } | null>(null);
   const [mousePreviewPos, setMousePreviewPos] = useState<{ x: number; y: number } | null>(null);
 
   // Local high-precision edge-aware object polygon generator (Magic Wand & Contour Refinement)
@@ -353,9 +405,16 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
       return obj.polygon;
     }
 
+    // Check performance cache first to avoid re-running flood-fill 60 times/sec during zoom/pan!
+    if (polygonCacheRef.current[obj.id]) {
+      return polygonCacheRef.current[obj.id];
+    }
+
     // 2. If it is the fallback's main focus region, generate a smart client-side foreground contour!
     if (obj.id === "fallback_obj_1" && uploadedImgData) {
-      return extractClientSideForegroundContour(uploadedImgData, edgeData);
+      const poly = extractClientSideForegroundContour(uploadedImgData, edgeData);
+      polygonCacheRef.current[obj.id] = poly;
+      return poly;
     }
 
     // If the image data is not loaded yet, use the organic fallback
@@ -364,17 +423,18 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     }
 
     try {
-      // 1. Convert normalized box (0-100) to 500x500 pixel coordinate scale
-      const size = 500;
+      // 1. Convert normalized box (0-100) to baseWidth x baseHeight pixel coordinate scale
+      const w = baseWidth;
+      const h = baseHeight;
       const [ymin, xmin, ymax, xmax] = obj.box;
-      const xStart = Math.max(0, Math.min(size - 1, Math.round((xmin / 100) * size)));
-      const xEnd = Math.max(0, Math.min(size - 1, Math.round((xmax / 100) * size)));
-      const yStart = Math.max(0, Math.min(size - 1, Math.round((ymin / 100) * size)));
-      const yEnd = Math.max(0, Math.min(size - 1, Math.round((ymax / 100) * size)));
+      const xStart = Math.max(0, Math.min(w - 1, Math.round((xmin / 100) * w)));
+      const xEnd = Math.max(0, Math.min(w - 1, Math.round((xmax / 100) * w)));
+      const yStart = Math.max(0, Math.min(h - 1, Math.round((ymin / 100) * h)));
+      const yEnd = Math.max(0, Math.min(h - 1, Math.round((ymax / 100) * h)));
 
       // 2. Compute seed coordinate as the center of the bounding box
-      const cx = Math.max(0, Math.min(size - 1, Math.round((xStart + xEnd) / 2)));
-      const cy = Math.max(0, Math.min(size - 1, Math.round((yStart + yEnd) / 2)));
+      const cx = Math.max(0, Math.min(w - 1, Math.round((xStart + xEnd) / 2)));
+      const cy = Math.max(0, Math.min(h - 1, Math.round((yStart + yEnd) / 2)));
 
       // 3. Sample average color around the center point
       let sumR = 0, sumG = 0, sumB = 0, count = 0;
@@ -382,8 +442,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         for (let dx = -1; dx <= 1; dx++) {
           const sx = cx + dx;
           const sy = cy + dy;
-          if (sx >= 0 && sx < size && sy >= 0 && sy < size) {
-            const idx = (sy * size + sx) * 4;
+          if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
+            const idx = (sy * w + sx) * 4;
             sumR += uploadedImgData.data[idx];
             sumG += uploadedImgData.data[idx + 1];
             sumB += uploadedImgData.data[idx + 2];
@@ -396,9 +456,9 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
       const seedB = count > 0 ? sumB / count : 128;
 
       // 4. Run simple queue-based flood fill to build a binary mask of the object
-      const mask = new Uint8Array(size * size);
+      const mask = new Uint8Array(w * h);
       const queue: [number, number][] = [[cx, cy]];
-      mask[cy * size + cx] = 1;
+      mask[cy * w + cx] = 1;
 
       // Color tolerance threshold - tuned for high quality natural boundaries
       const colorTolerance = 75;
@@ -415,7 +475,7 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
         for (const [nx, ny] of neighbors) {
           if (nx >= xStart && nx <= xEnd && ny >= yStart && ny <= yEnd) {
-            const idx = ny * size + nx;
+            const idx = ny * w + nx;
             if (mask[idx] === 0) {
               // Edge barrier from Sobel filter
               const isEdge = edgeData ? edgeData.data[idx * 4] > 100 : false;
@@ -457,8 +517,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
           const rxPixel = Math.round(cx + cosA * d);
           const ryPixel = Math.round(cy + sinA * d);
 
-          if (rxPixel >= 0 && rxPixel < size && ryPixel >= 0 && ryPixel < size) {
-            if (mask[ryPixel * size + rxPixel] === 1) {
+          if (rxPixel >= 0 && rxPixel < w && ryPixel >= 0 && ryPixel < h) {
+            if (mask[ryPixel * w + rxPixel] === 1) {
               lastValidX = rxPixel;
               lastValidY = ryPixel;
             } else {
@@ -470,8 +530,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         }
 
         // Convert back to percentage (0-100)
-        const px = Math.max(0, Math.min(100, (lastValidX / size) * 100));
-        const py = Math.max(0, Math.min(100, (lastValidY / size) * 100));
+        const px = Math.max(0, Math.min(100, (lastValidX / w) * 100));
+        const py = Math.max(0, Math.min(100, (lastValidY / h) * 100));
         points.push([px, py]);
       }
 
@@ -487,10 +547,13 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         smoothedPoints.push([sx, sy]);
       }
 
+      polygonCacheRef.current[obj.id] = smoothedPoints;
       return smoothedPoints;
     } catch (e) {
       console.warn("Error calculating high-precision polygon, using fallback:", e);
-      return getOrganicObjectPolygon(obj);
+      const poly = getOrganicObjectPolygon(obj);
+      polygonCacheRef.current[obj.id] = poly;
+      return poly;
     }
   }, [uploadedImgData, edgeData]);
 
@@ -514,24 +577,67 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     }
   }, [template]);
 
+  // Native non-passive Wheel Event Listener bound to the container wrapper to guarantee browser scrolling is completely blocked when zooming over the card
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
+
+    const onWheelHandler = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomIntensity = 0.08;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect) return;
+
+      // Get mouse position relative to canvas element
+      const mouseX = ((e.clientX - rect.left) / rect.width) * baseWidth;
+      const mouseY = ((e.clientY - rect.top) / rect.height) * baseHeight;
+
+      const wheel = e.deltaY < 0 ? 1 : -1;
+      const zoomFactor = Math.exp(wheel * zoomIntensity);
+
+      setScale((prevScale) => {
+        const nextScale = Math.max(1.0, Math.min(8.0, prevScale * zoomFactor));
+        if (nextScale === 1.0) {
+          setPanOffset({ x: 0, y: 0 });
+        } else {
+          // Zoom centered on the cursor
+          setPanOffset((prevPan) => {
+            const newPanX = mouseX - (mouseX - prevPan.x) * (nextScale / prevScale);
+            const newPanY = mouseY - (mouseY - prevPan.y) * (nextScale / prevScale);
+            return { x: newPanX, y: newPanY };
+          });
+        }
+        return nextScale;
+      });
+    };
+
+    container.addEventListener("wheel", onWheelHandler, { passive: false });
+    return () => {
+      container.removeEventListener("wheel", onWheelHandler);
+    };
+  }, [baseWidth, baseHeight]);
+
   // Handle Edge Detection on uploaded image
   useEffect(() => {
+    polygonCacheRef.current = {}; // Clear cache on image change or reload
     if (!template && customImage) {
       const tempCanvas = document.createElement("canvas");
       const ctx = tempCanvas.getContext("2d");
       if (!ctx) return;
 
-      const size = 500;
-      tempCanvas.width = size;
-      tempCanvas.height = size;
+      const w = baseWidth;
+      const h = baseHeight;
+      tempCanvas.width = w;
+      tempCanvas.height = h;
 
-      // Draw and scale the image to fit 500x500 box
-      ctx.drawImage(customImage, 0, 0, size, size);
-      const imgData = ctx.getImageData(0, 0, size, size);
+      // Draw and scale the image to fit baseWidth x baseHeight box
+      ctx.drawImage(customImage, 0, 0, w, h);
+      const imgData = ctx.getImageData(0, 0, w, h);
       setUploadedImgData(imgData);
 
       // Sobel Edge Filter
-      const gray = new Float32Array(size * size);
+      const gray = new Float32Array(w * h);
       for (let i = 0; i < imgData.data.length; i += 4) {
         gray[i / 4] =
           0.299 * imgData.data[i] +
@@ -539,25 +645,25 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
           0.114 * imgData.data[i + 2];
       }
 
-      const sobelData = ctx.createImageData(size, size);
-      for (let y = 1; y < size - 1; y++) {
-        for (let x = 1; x < size - 1; x++) {
-          const idx = y * size + x;
+      const sobelData = ctx.createImageData(w, h);
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const idx = y * w + x;
           const gx =
-            -1 * gray[(y - 1) * size + (x - 1)] +
-            1 * gray[(y - 1) * size + (x + 1)] -
-            2 * gray[y * size + (x - 1)] +
-            2 * gray[y * size + (x + 1)] -
-            1 * gray[(y + 1) * size + (x - 1)] +
-            1 * gray[(y + 1) * size + (x + 1)];
+            -1 * gray[(y - 1) * w + (x - 1)] +
+            1 * gray[(y - 1) * w + (x + 1)] -
+            2 * gray[y * w + (x - 1)] +
+            2 * gray[y * w + (x + 1)] -
+            1 * gray[(y + 1) * w + (x - 1)] +
+            1 * gray[(y + 1) * w + (x + 1)];
 
           const gy =
-            -1 * gray[(y - 1) * size + (x - 1)] -
-            2 * gray[(y - 1) * size + x] -
-            1 * gray[(y - 1) * size + (x + 1)] +
-            1 * gray[(y + 1) * size + (x - 1)] +
-            2 * gray[(y + 1) * size + x] +
-            1 * gray[(y + 1) * size + (x + 1)];
+            -1 * gray[(y - 1) * w + (x - 1)] -
+            2 * gray[(y - 1) * w + x] -
+            1 * gray[(y - 1) * w + (x + 1)] +
+            1 * gray[(y + 1) * w + (x - 1)] +
+            2 * gray[(y + 1) * w + x] +
+            1 * gray[(y + 1) * w + (x + 1)];
 
           const val = Math.sqrt(gx * gx + gy * gy);
           const pixelIdx = idx * 4;
@@ -572,7 +678,7 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
       setEdgeData(null);
       setUploadedImgData(null);
     }
-  }, [template, customImage]);
+  }, [template, customImage, baseWidth, baseHeight]);
 
   // COLOR & UTILITY HELPERS FOR SAYILARLA BOYAMA / RENK DEĞİŞTİRME
   const getRgb = (hex: string) => {
@@ -634,8 +740,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     const ctx = tempCanvas.getContext("2d");
     if (!ctx) return;
 
-    const width = template ? template.width : 500;
-    const height = template ? template.height : 500;
+    const width = baseWidth;
+    const height = baseHeight;
     tempCanvas.width = width;
     tempCanvas.height = height;
 
@@ -716,8 +822,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
       for (let y = hStep; y < height; y += step + options.gap) {
         for (let x = hStep; x < width; x += step + options.gap) {
-          // If we are in "objects" mode, we ONLY generate tiles inside selected object precise polygon shapes!
-          if (viewMode === "objects") {
+          // If we are in "objects" mode, or some objects are selected in "mosaic"/"guide" mode, we ONLY generate tiles inside selected object precise polygon shapes!
+          if (viewMode === "objects" || (selectedObjectIds.length > 0 && (viewMode === "mosaic" || viewMode === "guide"))) {
             const px = (x / width) * 100;
             const py = (y / height) * 100;
             // Pad for half-size plus gap and a tiny rotation buffer to keep tiles strictly inside
@@ -833,7 +939,9 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     edgeData,
     viewMode,
     selectedObjectIds,
-    detectedObjects
+    detectedObjects,
+    baseWidth,
+    baseHeight
   ]);
 
   // 2. MAIN DRAW EFFECT
@@ -845,14 +953,19 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const width = template ? template.width : 500;
-    const height = template ? template.height : 500;
+    const width = baseWidth;
+    const height = baseHeight;
     canvas.width = width;
     canvas.height = height;
 
-    // Draw Background
+    // Draw Background (drawn unzoomed/unpanned, which is correct so it fills the whole canvas container!)
     ctx.fillStyle = template ? options.backgroundColor : (options.backgroundColor || "#0d0e15");
     ctx.fillRect(0, 0, width, height);
+
+    // Save context and apply translation + scaling for Zoom and Pan
+    ctx.save();
+    ctx.translate(panOffset.x, panOffset.y);
+    ctx.scale(scale, scale);
 
     if (viewMode === "guide") {
       ctx.save();
@@ -1091,6 +1204,34 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         });
       }
 
+      // Draw edge segment insert vertex preview dot
+      if (segmentationTool === "auto" && hoveredSegment) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(hoveredSegment.x, hoveredSegment.y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = "#10b981"; // Emerald green
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+        ctx.shadowBlur = 4;
+        ctx.fill();
+        ctx.stroke();
+
+        // Draw a tiny plus icon inside
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        // horizontal line
+        ctx.moveTo(hoveredSegment.x - 3, hoveredSegment.y);
+        ctx.lineTo(hoveredSegment.x + 3, hoveredSegment.y);
+        // vertical line
+        ctx.moveTo(hoveredSegment.x, hoveredSegment.y - 3);
+        ctx.lineTo(hoveredSegment.x, hoveredSegment.y + 3);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
       // 5. Draw manual pen drawing path
       if (manualDrawPoints && manualDrawPoints.length > 0) {
         ctx.save();
@@ -1156,9 +1297,34 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     } else if (viewMode === "mosaic" || viewMode === "guide") {
       // MOSAIC RENDER & GUIDE MODE - Consume state `tiles`
 
+      // Draw custom background image under the mosaic if we are in custom image mode with active object selection
+      if (!template && customImage && selectedObjectIds && selectedObjectIds.length > 0 && viewMode === "mosaic") {
+        ctx.save();
+        ctx.drawImage(customImage, 0, 0, width, height);
+        ctx.restore();
+      }
+
       // Compute stats
       const stats: Record<string, { hex: string; count: number; name: string }> = {};
       tiles.forEach((tile) => {
+        // Masking: If we are in custom image mode with active object selection, only include tiles inside selected objects in the stats!
+        if (!template && customImage && selectedObjectIds && selectedObjectIds.length > 0) {
+          let insideAnySelected = false;
+          const px = (tile.x / width) * 100;
+          const py = (tile.y / height) * 100;
+          for (const objId of selectedObjectIds) {
+            const obj = detectedObjects?.find(o => o.id === objId);
+            if (obj) {
+              const poly = getObjectPolygon(obj);
+              if (isPointInPolygon(px, py, poly)) {
+                insideAnySelected = true;
+                break;
+              }
+            }
+          }
+          if (!insideAnySelected) return; // Skip counting this tile in stats!
+        }
+
         const displayColor = getDisplayColor(tile.color);
         const hex = displayColor.toLowerCase();
         if (!stats[hex]) {
@@ -1185,6 +1351,25 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
       for (let i = 0; i < countToDraw; i++) {
         const tile = sortedTiles[i];
+
+        // Masking: If we are in custom image mode with active object selection, only render tiles inside selected objects!
+        if (!template && customImage && selectedObjectIds && selectedObjectIds.length > 0) {
+          let insideAnySelected = false;
+          const px = (tile.x / width) * 100;
+          const py = (tile.y / height) * 100;
+          for (const objId of selectedObjectIds) {
+            const obj = detectedObjects?.find(o => o.id === objId);
+            if (obj) {
+              const poly = getObjectPolygon(obj);
+              if (isPointInPolygon(px, py, poly)) {
+                insideAnySelected = true;
+                break;
+              }
+            }
+          }
+          if (!insideAnySelected) continue; // Skip rendering this tile!
+        }
+
         const displayColor = getDisplayColor(tile.color);
 
         ctx.save();
@@ -1239,6 +1424,9 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         });
       }
     }
+
+    // Restore context back to its original state (before zoom/pan translation)
+    ctx.restore();
   }, [
     template,
     pathCache,
@@ -1262,7 +1450,13 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     isDrawingClosed,
     mousePreviewPos,
     draggedVertex,
-    hoveredVertex
+    hoveredVertex,
+    hoveredSegment,
+    scale,
+    panOffset,
+    isPanning,
+    baseWidth,
+    baseHeight
   ]);
 
   // 3. INTERACTIVE COORDINATE & TILE SELECTION HELPERS
@@ -1272,7 +1466,10 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     const rect = canvas.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
     const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
-    return { x, y };
+    return {
+      x: (x - panOffset.x) / scale,
+      y: (y - panOffset.y) / scale
+    };
   };
 
   const findClosestTile = (x: number, y: number, maxDistance = options.tileSize * 1.5): InteractiveTile | null => {
@@ -1296,8 +1493,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     if (viewMode === "objects") {
       const coords = getCanvasCoords(e);
       if (!coords) return;
-      const width = template ? template.width : 500;
-      const height = template ? template.height : 500;
+      const width = baseWidth;
+      const height = baseHeight;
       const px = (coords.x / width) * 100;
       const py = (coords.y / height) * 100;
 
@@ -1343,8 +1540,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     if (viewMode === "objects") {
       const coords = getCanvasCoords(e);
       if (!coords) return;
-      const width = template ? template.width : 500;
-      const height = template ? template.height : 500;
+      const width = baseWidth;
+      const height = baseHeight;
       const px = (coords.x / width) * 100;
       const py = (coords.y / height) * 100;
 
@@ -1392,6 +1589,53 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   const [isMouseDown, setIsMouseDown] = useState(false);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const isRightClick = e.button === 2;
+    const isShiftDrag = e.shiftKey;
+    
+    // If scaled in, clicking outside interactive tiles or objects can also start pan
+    let isLeftClickPan = false;
+    if (scale > 1.05 && e.button === 0) {
+      const coords = getCanvasCoords(e);
+      if (coords) {
+        if (viewMode === "mosaic") {
+          // In mosaic mode, if they didn't click on any tile, they can pan
+          isLeftClickPan = !findClosestTile(coords.x, coords.y);
+        } else if (viewMode === "objects") {
+          // In objects mode, if they didn't click near a vertex or segment, and they aren't drawing with pen
+          const width = baseWidth;
+          const height = baseHeight;
+          let clickedVertex = false;
+          if (detectedObjects && detectedObjects.length > 0) {
+            for (const obj of detectedObjects) {
+              if (!selectedObjectIds.includes(obj.id)) continue;
+              const polyPoints = getObjectPolygon(obj);
+              for (let idx = 0; idx < polyPoints.length; idx++) {
+                const [px, py] = polyPoints[idx];
+                const cx = (px / 100) * width;
+                const cy = (py / 100) * height;
+                if (Math.hypot(coords.x - cx, coords.y - cy) < 10) {
+                  clickedVertex = true;
+                  break;
+                }
+              }
+              if (clickedVertex) break;
+            }
+          }
+          const clickedSegment = (segmentationTool === "auto" && hoveredSegment);
+          isLeftClickPan = segmentationTool !== "pen" && !clickedVertex && !clickedSegment;
+        } else if (viewMode === "vector") {
+          // In vector mode, they can pan if scale > 1.05
+          isLeftClickPan = true;
+        }
+      }
+    }
+
+    if (isRightClick || isShiftDrag || isLeftClickPan) {
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
+      return;
+    }
+
     if (viewMode === "objects") {
       const coords = getCanvasCoords(e);
       if (!coords) return;
@@ -1400,8 +1644,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
       if (segmentationTool === "pen") {
         if (isDrawingClosed) return; // Wait for they clear or confirm
 
-        const width = template ? template.width : 500;
-        const height = template ? template.height : 500;
+        const width = baseWidth;
+        const height = baseHeight;
         const px = (coords.x / width) * 100;
         const py = (coords.y / height) * 100;
 
@@ -1427,8 +1671,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
       // Check if clicking near any vertex of currently selected objects to initiate dragging
       if (detectedObjects && detectedObjects.length > 0) {
-        const width = template ? template.width : 500;
-        const height = template ? template.height : 500;
+        const width = baseWidth;
+        const height = baseHeight;
 
         for (const obj of detectedObjects) {
           if (!selectedObjectIds.includes(obj.id)) continue;
@@ -1444,6 +1688,32 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
               return;
             }
           }
+        }
+      }
+
+      // Check if clicking near/on an edge segment of any selected object to insert a new vertex point
+      if (segmentationTool === "auto" && hoveredSegment && onUpdateObjectPolygon) {
+        const width = baseWidth;
+        const height = baseHeight;
+        const targetObj = detectedObjects.find((o) => o.id === hoveredSegment.objId);
+        if (targetObj) {
+          const originalPoly = getObjectPolygon(targetObj);
+          
+          // Insert the new vertex point between index1 and index2
+          const newPt = [
+            (hoveredSegment.x / width) * 100,
+            (hoveredSegment.y / height) * 100
+          ];
+          
+          const updatedPoly = [...originalPoly];
+          const insertIndex = hoveredSegment.index1 + 1;
+          updatedPoly.splice(insertIndex, 0, newPt);
+          
+          onUpdateObjectPolygon(hoveredSegment.objId, updatedPoly);
+          setDraggedVertex({ objId: hoveredSegment.objId, pointIndex: insertIndex });
+          setIsMouseDown(true);
+          setHoveredSegment(null);
+          return;
         }
       }
 
@@ -1512,12 +1782,28 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isPanning) {
+      const nextX = e.clientX - panStart.x;
+      const nextY = e.clientY - panStart.y;
+      
+      const maxPanX = baseWidth * (scale - 1) + 120;
+      const minPanX = -baseWidth * (scale - 1) - 120;
+      const maxPanY = baseHeight * (scale - 1) + 120;
+      const minPanY = -baseHeight * (scale - 1) - 120;
+
+      setPanOffset({
+        x: Math.max(minPanX, Math.min(maxPanX, nextX)),
+        y: Math.max(minPanY, Math.min(maxPanY, nextY))
+      });
+      return;
+    }
+
     const coords = getCanvasCoords(e);
     if (!coords) return;
 
     if (viewMode === "objects") {
-      const width = template ? template.width : 500;
-      const height = template ? template.height : 500;
+      const width = baseWidth;
+      const height = baseHeight;
 
       // Update manual draw mouse preview line
       if (segmentationTool === "pen" && manualDrawPoints && manualDrawPoints.length > 0 && !isDrawingClosed) {
@@ -1561,8 +1847,42 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
       }
       setHoveredVertex(foundHoverVertex);
 
-      // If dragging or hovering a vertex, don't trigger normal object background hover to avoid jumpiness
-      if (foundHoverVertex || draggedVertex) {
+      // Check if hovering near a segment to allow adding a new point
+      let closestSeg = null;
+      if (!foundHoverVertex && !draggedVertex && segmentationTool === "auto" && detectedObjects && detectedObjects.length > 0) {
+        let minSegDist = 8; // Pixels limit
+        for (const obj of detectedObjects) {
+          if (!selectedObjectIds.includes(obj.id)) continue;
+          const polyPoints = getObjectPolygon(obj);
+          const len = polyPoints.length;
+          for (let i = 0; i < len; i++) {
+            const p1 = polyPoints[i];
+            const p2 = polyPoints[(i + 1) % len];
+            const x1 = (p1[0] / 100) * width;
+            const y1 = (p1[1] / 100) * height;
+            const x2 = (p2[0] / 100) * width;
+            const y2 = (p2[1] / 100) * height;
+
+            const { distance, t } = getDistanceToSegment(coords.x, coords.y, x1, y1, x2, y2);
+            if (distance < minSegDist) {
+              minSegDist = distance;
+              const projX = x1 + t * (x2 - x1);
+              const projY = y1 + t * (y2 - y1);
+              closestSeg = {
+                objId: obj.id,
+                index1: i,
+                index2: (i + 1) % len,
+                x: projX,
+                y: projY
+              };
+            }
+          }
+        }
+      }
+      setHoveredSegment(closestSeg);
+
+      // If dragging, hovering a vertex or hovering a segment, don't trigger normal object background hover to avoid jumpiness
+      if (foundHoverVertex || draggedVertex || closestSeg) {
         if (onHoverObject) onHoverObject(null);
         return;
       }
@@ -1594,12 +1914,48 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
   const handleMouseUp = () => {
     setIsMouseDown(false);
+    setIsPanning(false);
     setDraggedTileId(null);
     setDraggedVertex(null);
   };
 
+  const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (viewMode === "objects" && segmentationTool === "auto") {
+      const coords = getCanvasCoords(e);
+      if (!coords) return;
+
+      if (detectedObjects && detectedObjects.length > 0) {
+        const width = baseWidth;
+        const height = baseHeight;
+
+        for (const obj of detectedObjects) {
+          if (!selectedObjectIds.includes(obj.id)) continue;
+          const polyPoints = getObjectPolygon(obj);
+          
+          // Must have at least 3 points to remain a valid polygon
+          if (polyPoints.length <= 3) continue;
+
+          for (let idx = 0; idx < polyPoints.length; idx++) {
+            const [px, py] = polyPoints[idx];
+            const cx = (px / 100) * width;
+            const cy = (py / 100) * height;
+            const dist = Math.hypot(coords.x - cx, coords.y - cy);
+            if (dist < 10) {
+              // Delete this point!
+              const updatedPoly = polyPoints.filter((_, i) => i !== idx);
+              onUpdateObjectPolygon?.(obj.id, updatedPoly);
+              setHoveredVertex(null);
+              setHoveredSegment(null);
+              return;
+            }
+          }
+        }
+      }
+    }
+  };
+
   return (
-    <div className="relative group overflow-hidden border border-slate-700/60 rounded-xl bg-slate-900 shadow-2xl">
+    <div ref={containerRef} className="relative group overflow-hidden border border-slate-700/60 rounded-xl bg-slate-900 shadow-2xl">
       {/* Interactive indicator overlay */}
       {viewMode === "vector" && template && (
         <div className="absolute top-3 left-3 bg-slate-950/80 backdrop-blur-md text-xs font-medium text-amber-400 px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 z-10 pointer-events-none border border-amber-500/30">
@@ -1618,23 +1974,79 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
         </div>
       )}
 
+      {/* Zoom and Pan Floating Controls */}
+      <div className="absolute bottom-3 right-3 flex items-center gap-1 bg-slate-950/80 backdrop-blur-md px-2 py-1.5 rounded-xl shadow-xl border border-slate-700/50 z-20 transition-opacity">
+        <button
+          onClick={() => {
+            setScale((prev) => Math.min(8.0, prev + 0.2));
+          }}
+          className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white/10 active:scale-90 text-slate-300 hover:text-white transition-all text-xs font-bold"
+          title="Yakınlaştır (Zoom In)"
+        >
+          ➕
+        </button>
+        <button
+          onClick={() => {
+            const nextVal = Math.max(1.0, scale - 0.2);
+            if (nextVal === 1.0) {
+              setPanOffset({ x: 0, y: 0 });
+            }
+            setScale(nextVal);
+          }}
+          className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-white/10 active:scale-90 text-slate-300 hover:text-white transition-all text-xs font-bold"
+          title="Uzaklaştır (Zoom Out)"
+        >
+          ➖
+        </button>
+        <button
+          onClick={() => {
+            setScale(1.0);
+            setPanOffset({ x: 0, y: 0 });
+          }}
+          className="px-2.5 h-7 flex items-center justify-center rounded-lg hover:bg-white/10 active:scale-90 text-[10px] font-bold text-slate-400 hover:text-white transition-all"
+          title="Sıfırla (Reset)"
+        >
+          Sıfırla
+        </button>
+        <div className="h-3 w-[1px] bg-slate-700 mx-1"></div>
+        <span className="text-[10px] text-slate-400 font-semibold select-none pr-1">
+          %{Math.round(scale * 100)}
+        </span>
+      </div>
+
+      {/* Floating Panning Tooltip when scaled in */}
+      {scale > 1.05 && (
+        <div className="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md text-[10px] text-slate-300 px-2.5 py-1.5 rounded-lg border border-slate-700/50 z-10 pointer-events-none select-none shadow-lg">
+          🖱️ Sağ Tık veya Shift ile sürükleyerek resmi kaydırın (Pan)
+        </div>
+      )}
+
       <canvas
         id="mosaic-canvas"
         ref={canvasRef}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onDoubleClick={handleDoubleClick}
+        onContextMenu={(e) => e.preventDefault()}
         onMouseLeave={() => {
           setHoveredRegionId(null);
           setHoveredTileId(null);
+          setIsPanning(false);
           handleMouseUp();
         }}
-        className={`w-full max-w-[500px] h-[500px] block transition-all duration-300 mx-auto select-none ${
+        width={baseWidth}
+        height={baseHeight}
+        style={{
+          aspectRatio: `${baseWidth} / ${baseHeight}`,
+          maxHeight: `${baseHeight}px`
+        }}
+        className={`w-full max-w-[500px] block mx-auto select-none ${
           viewMode === "vector" && template 
             ? "cursor-crosshair" 
             : viewMode === "objects"
             ? (segmentationTool === "pen" ? "cursor-cell" : (hoveredVertex ? "cursor-move" : "cursor-default"))
-            : "cursor-grab"
+            : (isPanning ? "cursor-grabbing" : (scale > 1.05 ? "cursor-grab" : "cursor-default"))
         }`}
       />
     </div>

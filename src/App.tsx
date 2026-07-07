@@ -1788,9 +1788,16 @@ export default function App() {
                 {/* Tab content 1: AUTO */}
                 {segmentationTool === "auto" && (
                   <div className="space-y-3">
-                    <p className="text-[10px] text-slate-400 italic bg-white/5 p-2 rounded-lg border border-white/5">
-                      💡 <strong>Sınır Çizgilerini Genişletme:</strong> Seçtiğiniz nesnelerin sınırlarını daha hassas hale getirmek veya genişletmek için görsel üstündeki <strong>altın renkli noktaları</strong> dilediğiniz gibi sürükleyebilirsiniz!
-                    </p>
+                    <div className="text-[11px] text-slate-300 bg-indigo-950/20 p-3 rounded-xl border border-indigo-500/10 space-y-1.5 leading-relaxed">
+                      <p className="font-bold text-indigo-400 flex items-center gap-1">
+                        ✨ Sınır Noktalarını Düzenleme
+                      </p>
+                      <ul className="list-disc pl-4 space-y-1 text-[10px] text-slate-400">
+                        <li><strong>Nokta Taşı:</strong> Sınırı genişletmek veya daraltmak için altın noktaları sürükleyin.</li>
+                        <li><strong>Yeni Nokta Ekle:</strong> Sınır çizgisi üzerinde boş bir yere tıklayarak yeni bir nokta oluşturun.</li>
+                        <li><strong>Nokta Sil:</strong> Gereksiz bir noktayı kaldırmak için üzerine <strong>çift tıklayın (Double-Click)</strong>.</li>
+                      </ul>
+                    </div>
 
                     {detectedObjects.length > 0 ? (
                       <div className="grid grid-cols-2 gap-2">
@@ -1906,6 +1913,71 @@ export default function App() {
                       >
                         💾 Sınırı Nesne Yap
                       </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* List of Custom-Drawn Objects */}
+                {detectedObjects.some((o) => o.id.startsWith("manual_")) && (
+                  <div className="border-t border-white/5 pt-4 mt-2 space-y-2">
+                    <h5 className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                      ✏️ Çizdiğiniz Manuel Nesneler ({detectedObjects.filter((o) => o.id.startsWith("manual_")).length})
+                    </h5>
+                    <div className="grid grid-cols-2 gap-2 max-h-[160px] overflow-y-auto pr-1">
+                      {detectedObjects
+                        .filter((o) => o.id.startsWith("manual_"))
+                        .map((obj) => {
+                          const isSelected = selectedObjectIds.includes(obj.id);
+                          return (
+                            <div
+                              key={obj.id}
+                              className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 transition-all ${
+                                isSelected
+                                  ? "bg-indigo-950/30 border-indigo-500/45 text-indigo-300"
+                                  : "bg-black/20 border-white/5 text-slate-400 hover:bg-white/5"
+                              }`}
+                            >
+                              <div
+                                onClick={() => {
+                                  setSelectedObjectIds((prev) =>
+                                    prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]
+                                  );
+                                }}
+                                className="min-w-0 flex-1 cursor-pointer"
+                              >
+                                <p className="text-xs font-semibold truncate">{obj.name}</p>
+                                <p className="text-[9px] text-slate-500 font-mono">
+                                  {obj.polygon?.length || 0} Nokta
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDetectedObjects((prev) => prev.filter((o) => o.id !== obj.id));
+                                    setSelectedObjectIds((prev) => prev.filter((id) => id !== obj.id));
+                                  }}
+                                  title="Çizimi Sil"
+                                  className="w-6 h-6 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/10 transition-all hover:scale-105 active:scale-95 shrink-0"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                                <div
+                                  onClick={() => {
+                                    setSelectedObjectIds((prev) =>
+                                      prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]
+                                    );
+                                  }}
+                                  className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 cursor-pointer ${
+                                    isSelected ? "border-indigo-500 bg-indigo-500 text-white" : "border-white/10 bg-black/40"
+                                  }`}
+                                >
+                                  {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                     </div>
                   </div>
                 )}
