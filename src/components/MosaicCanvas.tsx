@@ -645,6 +645,11 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
           0.114 * imgData.data[i + 2];
       }
 
+      // Use dynamic threshold based on options.groutThreshold (range 10 to 100, default 80)
+      // A higher groutThreshold (e.g. 90) means higher sensitivity (lower Sobel threshold, e.g. 15, detects more detail)
+      // A lower groutThreshold (e.g. 20) means lower sensitivity (higher Sobel threshold, e.g. 85, ignores subtle details)
+      const dynamicThreshold = Math.max(5, 105 - options.groutThreshold);
+
       const sobelData = ctx.createImageData(w, h);
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
@@ -667,9 +672,9 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
           const val = Math.sqrt(gx * gx + gy * gy);
           const pixelIdx = idx * 4;
-          sobelData.data[pixelIdx] = val > 50 ? 255 : 0; // high contrast edges
-          sobelData.data[pixelIdx + 1] = val > 50 ? 255 : 0;
-          sobelData.data[pixelIdx + 2] = val > 50 ? 255 : 0;
+          sobelData.data[pixelIdx] = val > dynamicThreshold ? 255 : 0; // high contrast edges
+          sobelData.data[pixelIdx + 1] = val > dynamicThreshold ? 255 : 0;
+          sobelData.data[pixelIdx + 2] = val > dynamicThreshold ? 255 : 0;
           sobelData.data[pixelIdx + 3] = 255;
         }
       }
@@ -678,7 +683,7 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
       setEdgeData(null);
       setUploadedImgData(null);
     }
-  }, [template, customImage, baseWidth, baseHeight]);
+  }, [template, customImage, baseWidth, baseHeight, options.groutThreshold]);
 
   // COLOR & UTILITY HELPERS FOR SAYILARLA BOYAMA / RENK DEĞİŞTİRME
   const getRgb = (hex: string) => {
@@ -955,15 +960,17 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
 
     const width = baseWidth;
     const height = baseHeight;
-    canvas.width = width;
-    canvas.height = height;
+    const resolutionScale = 3.0; // 3x ultra-sharp resolution scale for high-DPI/2K retina rendering
+    canvas.width = width * resolutionScale;
+    canvas.height = height * resolutionScale;
 
     // Draw Background (drawn unzoomed/unpanned, which is correct so it fills the whole canvas container!)
     ctx.fillStyle = template ? options.backgroundColor : (options.backgroundColor || "#0d0e15");
-    ctx.fillRect(0, 0, width, height);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Save context and apply translation + scaling for Zoom and Pan
     ctx.save();
+    ctx.scale(resolutionScale, resolutionScale);
     ctx.translate(panOffset.x, panOffset.y);
     ctx.scale(scale, scale);
 
@@ -1464,8 +1471,8 @@ export const MosaicCanvas: React.FC<MosaicCanvasProps> = ({
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
-    const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+    const x = ((e.clientX - rect.left) / rect.width) * baseWidth;
+    const y = ((e.clientY - rect.top) / rect.height) * baseHeight;
     return {
       x: (x - panOffset.x) / scale,
       y: (y - panOffset.y) / scale

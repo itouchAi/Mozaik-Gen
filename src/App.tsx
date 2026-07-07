@@ -80,6 +80,7 @@ export default function App() {
 
   // Fullscreen & right accordion sidebar states
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [fullscreenWarning, setFullscreenWarning] = useState<boolean>(false);
   const [expandedPanel, setExpandedPanel] = useState<string>("design");
 
   // Color selection active palette state
@@ -186,18 +187,25 @@ export default function App() {
 
   // Fullscreen API Helper Methods
   const enterFullscreen = async () => {
-    const root = document.getElementById("root");
-    if (root) {
+    const docEl = document.documentElement;
+    if (docEl) {
       try {
-        if (root.requestFullscreen) {
-          await root.requestFullscreen();
-        } else if ((root as any).webkitRequestFullscreen) {
-          await (root as any).webkitRequestFullscreen();
+        if (docEl.requestFullscreen) {
+          await docEl.requestFullscreen();
+        } else if ((docEl as any).webkitRequestFullscreen) {
+          await (docEl as any).webkitRequestFullscreen();
+        } else if ((docEl as any).msRequestFullscreen) {
+          await (docEl as any).msRequestFullscreen();
         }
         setIsFullscreen(true);
       } catch (err) {
-        console.error("Error entering true fullscreen:", err);
+        console.warn("Monitor level fullscreen blocked by iframe sandbox:", err);
+        // Fallback to internal responsive fullscreen mode
         setIsFullscreen(true);
+        // Trigger elegant, non-obstructive UI toast warning
+        setFullscreenWarning(true);
+        // Auto-dismiss after 5 seconds
+        setTimeout(() => setFullscreenWarning(false), 6000);
       }
     } else {
       setIsFullscreen(true);
@@ -637,6 +645,29 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#050508] text-slate-300 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200 relative overflow-hidden">
       
+      {/* Sandbox Fullscreen Toast Warning */}
+      {fullscreenWarning && (
+        <div className="fixed top-6 right-6 z-[9999] max-w-sm bg-[#0d0d18]/95 border border-amber-500/30 border-l-4 border-l-amber-500 text-slate-100 p-4 rounded-xl shadow-2xl backdrop-blur-md animate-slideIn flex gap-3 items-start">
+          <div className="w-5 h-5 rounded-full bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <div className="space-y-1">
+            <h5 className="text-xs font-bold text-white uppercase tracking-wider">İframe Engeli Aşılıyor</h5>
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              Monitör düzeyinde tam ekran için lütfen sağ üstteki <strong>"Yeni Sekmede Aç"</strong> (New Tab) butonuna tıklayın, ardından bu ekrandan tam ekranı aktifleştirin.
+            </p>
+          </div>
+          <button 
+            onClick={() => setFullscreenWarning(false)}
+            className="text-slate-500 hover:text-slate-300 transition-all text-sm font-semibold ml-2 shrink-0 cursor-pointer"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Background Radial Dots Overlay */}
       <div className="absolute inset-0 opacity-10 pointer-events-none z-0" 
            style={{ backgroundImage: 'radial-gradient(#4f46e5 0.5px, transparent 0.5px)', backgroundSize: '24px 24px' }}></div>
@@ -1391,6 +1422,32 @@ export default function App() {
                       <div className="w-9 h-5 bg-[#050508] border border-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-500 after:border-slate-500 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
                     </label>
                   </div>
+
+                  {/* Dynamic Grout/Edge Sensitivity slider */}
+                  {options.useGroutGaps && (
+                    <div className="p-3 rounded-xl bg-black/40 border border-white/5 space-y-2.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex flex-col">
+                          <span className="text-slate-300">Kontur & Kenar Hassasiyeti (Sensitivity)</span>
+                          <span className="text-[9px] text-slate-500">Kenar algılama ve derz sınırı duyarlılığı</span>
+                        </div>
+                        <span className="font-mono text-indigo-400 font-bold">%{options.groutThreshold}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="10"
+                        max="100"
+                        step="5"
+                        value={options.groutThreshold}
+                        onChange={(e) => setOptions((prev) => ({ ...prev, groutThreshold: parseInt(e.target.value) }))}
+                        className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                      />
+                      <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                        <span>Düşük Detay (Kalın Kenar)</span>
+                        <span>Yüksek Detay (İnce Kontur)</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Vektör Outlines & Arka Plan */}
@@ -2466,6 +2523,37 @@ export default function App() {
                           onChange={(e) => setOptions((prev) => ({ ...prev, jitter: parseInt(e.target.value) }))}
                           className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
                         />
+                      </div>
+
+                      {/* Grout Boundary Masking toggle & slider (Fullscreen) */}
+                      <div className="space-y-2 border-t border-white/5 pt-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-slate-400">Çizgi Boşluklarını Koru (Derz Payı)</span>
+                          <input
+                            type="checkbox"
+                            checked={options.useGroutGaps}
+                            onChange={(e) => setOptions((prev) => ({ ...prev, useGroutGaps: e.target.checked }))}
+                            className="accent-indigo-500 cursor-pointer"
+                          />
+                        </div>
+
+                        {options.useGroutGaps && (
+                          <div className="space-y-1.5 p-2 rounded bg-black/40 border border-white/5">
+                            <div className="flex items-center justify-between text-[10px] text-slate-400">
+                              <span>Kontur & Kenar Hassasiyeti</span>
+                              <span className="font-mono text-indigo-400 font-bold">%{options.groutThreshold}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="10"
+                              max="100"
+                              step="5"
+                              value={options.groutThreshold}
+                              onChange={(e) => setOptions((prev) => ({ ...prev, groutThreshold: parseInt(e.target.value) }))}
+                              className="w-full accent-indigo-500 h-1 bg-white/5 rounded-lg appearance-none cursor-pointer"
+                            />
+                          </div>
+                        )}
                       </div>
 
                       {/* Outlines toggles */}
